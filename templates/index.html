@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wauwatosa Rental Search</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f8f9fa; }
+
+    .status-tabs .nav-link { color: #495057; }
+    .status-tabs .nav-link.active { font-weight: 600; }
+
+    .listing-row { background: #fff; border-left: 4px solid #dee2e6; transition: border-color 0.15s; }
+    .listing-row.status-new          { border-left-color: #6c757d; }
+    .listing-row.status-interested   { border-left-color: #0d6efd; }
+    .listing-row.status-touring_applying { border-left-color: #fd7e14; }
+    .listing-row.status-passed       { border-left-color: #dc3545; opacity: 0.55; }
+
+    .badge-source { font-size: 0.7rem; font-weight: 500; }
+    .badge-duplex { background: #198754; font-size: 0.7rem; }
+
+    .status-btn { font-size: 0.75rem; padding: 2px 8px; }
+    .status-btn.active-status { font-weight: 700; box-shadow: inset 0 0 0 2px rgba(0,0,0,.25); }
+
+    .notes-field { font-size: 0.82rem; border: 1px solid #dee2e6; border-radius: 4px; padding: 4px 8px; width: 100%; resize: none; background: #fafafa; }
+    .notes-field:focus { outline: none; border-color: #86b7fe; background: #fff; }
+
+    .rent-badge { font-size: 1rem; font-weight: 600; color: #212529; }
+    .no-rent { color: #adb5bd; font-size: 0.85rem; }
+
+    .filter-bar { background: #fff; border-bottom: 1px solid #dee2e6; padding: 12px 0; position: sticky; top: 0; z-index: 100; }
+
+    .count-pill { font-size: 0.72rem; background: #e9ecef; color: #495057; border-radius: 999px; padding: 1px 7px; margin-left: 4px; }
+
+    .listing-title a { color: #212529; text-decoration: none; font-weight: 500; }
+    .listing-title a:hover { color: #0d6efd; text-decoration: underline; }
+
+    .saved-flash { color: #198754; font-size: 0.75rem; opacity: 0; transition: opacity 0.3s; }
+    .saved-flash.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="bg-dark text-white py-3 px-4 d-flex align-items-center justify-content-between">
+  <div>
+    <h5 class="mb-0 fw-bold">🏠 Wauwatosa Rental Search</h5>
+    <small class="text-secondary">{{ counts.total }} listings tracked</small>
+  </div>
+  <div class="d-flex gap-3 text-center">
+    <div><div class="fw-bold">{{ counts.new }}</div><small class="text-secondary">New</small></div>
+    <div><div class="fw-bold text-primary">{{ counts.interested }}</div><small class="text-secondary">Interested</small></div>
+    <div><div class="fw-bold text-warning">{{ counts.touring_applying }}</div><small class="text-secondary">Touring</small></div>
+    <div><div class="fw-bold text-danger">{{ counts.passed }}</div><small class="text-secondary">Passed</small></div>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="filter-bar shadow-sm">
+  <form method="get" class="container-fluid px-4">
+    <div class="row g-2 align-items-center">
+
+      <!-- Status tabs -->
+      <div class="col-auto">
+        <div class="btn-group btn-group-sm" role="group">
+          <a href="?" class="btn btn-outline-secondary {{ 'active' if not filters.status }}">All</a>
+          <a href="?status=new{{ '&source=' + filters.source if filters.source }}" class="btn btn-outline-secondary {{ 'active' if filters.status == 'new' }}">
+            New <span class="count-pill">{{ counts.new }}</span>
+          </a>
+          <a href="?status=interested{{ '&source=' + filters.source if filters.source }}" class="btn btn-outline-primary {{ 'active' if filters.status == 'interested' }}">
+            Interested <span class="count-pill">{{ counts.interested }}</span>
+          </a>
+          <a href="?status=touring_applying{{ '&source=' + filters.source if filters.source }}" class="btn btn-outline-warning {{ 'active' if filters.status == 'touring_applying' }}">
+            Touring <span class="count-pill">{{ counts.touring_applying }}</span>
+          </a>
+          <a href="?status=passed{{ '&source=' + filters.source if filters.source }}" class="btn btn-outline-danger {{ 'active' if filters.status == 'passed' }}">
+            Passed <span class="count-pill">{{ counts.passed }}</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Source filter -->
+      <div class="col-auto">
+        <select name="source" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">All sources</option>
+          {% for s in sources %}
+          <option value="{{ s }}" {{ 'selected' if filters.source == s }}>{{ s.replace('_', ' ') }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Max rent -->
+      <div class="col-auto">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text">Max $</span>
+          <input type="number" name="max_rent" class="form-control" style="width:80px"
+            placeholder="1600" value="{{ filters.max_rent or '' }}" onchange="this.form.submit()">
+        </div>
+      </div>
+
+      <!-- Duplex only -->
+      <div class="col-auto">
+        <div class="form-check form-check-inline mb-0">
+          <input class="form-check-input" type="checkbox" name="duplex_only" value="1"
+            id="duplexOnly" {{ 'checked' if filters.duplex_only }} onchange="this.form.submit()">
+          <label class="form-check-label small" for="duplexOnly">Duplex/upper/lower only</label>
+        </div>
+      </div>
+
+      <!-- Search -->
+      <div class="col">
+        <div class="input-group input-group-sm">
+          <input type="text" name="q" class="form-control" placeholder="Search titles, neighborhoods…" value="{{ filters.q }}">
+          <button class="btn btn-outline-secondary" type="submit">Search</button>
+          {% if filters.q %}
+          <a href="?" class="btn btn-outline-secondary">✕</a>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="col-auto text-muted small">{{ listings|length }} shown</div>
+    </div>
+  </form>
+</div>
+
+<!-- Listings table -->
+<div class="container-fluid px-4 py-3">
+  {% if not listings %}
+  <div class="text-center text-muted py-5">No listings match your filters.</div>
+  {% else %}
+  <div class="d-flex flex-column gap-2">
+    {% for l in listings %}
+    <div class="listing-row status-{{ l.status }} rounded shadow-sm p-3" id="row-{{ l.id }}">
+      <div class="row align-items-start g-2">
+
+        <!-- Rent -->
+        <div class="col-auto text-center" style="min-width:70px">
+          {% if l.rent %}
+          <div class="rent-badge">${{ '{:,}'.format(l.rent) }}</div>
+          {% else %}
+          <div class="no-rent">—</div>
+          {% endif %}
+          {% if l.beds %}
+          <div class="text-muted" style="font-size:0.8rem">{{ l.beds }}BR</div>
+          {% endif %}
+        </div>
+
+        <!-- Title + badges -->
+        <div class="col">
+          <div class="listing-title mb-1">
+            <a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title or 'Untitled listing' }}</a>
+          </div>
+          <div class="d-flex flex-wrap gap-1 align-items-center">
+            <span class="badge bg-secondary badge-source">{{ l.source.replace('_', ' ') }}</span>
+            {% if l.neighborhood %}
+            <span class="badge bg-light text-dark border badge-source">{{ l.neighborhood }}</span>
+            {% endif %}
+            {% if l.duplex_flag %}
+            <span class="badge badge-duplex text-white">duplex/upper/lower</span>
+            {% endif %}
+            {% if l.fit_score is not none %}
+            <span class="badge bg-info text-dark badge-source">score: {{ l.fit_score }}/10</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Status buttons -->
+        <div class="col-auto">
+          <div class="d-flex gap-1 flex-wrap justify-content-end">
+            <button onclick="setStatus({{ l.id }}, 'new')"
+              class="btn btn-sm btn-outline-secondary status-btn {{ 'active-status' if l.status == 'new' }}">
+              New
+            </button>
+            <button onclick="setStatus({{ l.id }}, 'interested')"
+              class="btn btn-sm btn-outline-primary status-btn {{ 'active-status' if l.status == 'interested' }}">
+              Interested
+            </button>
+            <button onclick="setStatus({{ l.id }}, 'touring_applying')"
+              class="btn btn-sm btn-outline-warning status-btn {{ 'active-status' if l.status == 'touring_applying' }}">
+              Touring / Applying
+            </button>
+            <button onclick="setStatus({{ l.id }}, 'passed')"
+              class="btn btn-sm btn-outline-danger status-btn {{ 'active-status' if l.status == 'passed' }}">
+              Pass
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Notes row -->
+      <div class="row mt-2">
+        <div class="col-auto" style="min-width:70px"></div>
+        <div class="col">
+          <div class="d-flex align-items-center gap-2">
+            <textarea class="notes-field" rows="1"
+              placeholder="Add notes…"
+              onblur="saveNotes({{ l.id }}, this)">{{ l.notes or '' }}</textarea>
+            <span class="saved-flash" id="saved-{{ l.id }}">saved</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<script>
+async function setStatus(id, status) {
+  await fetch(`/listings/${id}/status`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status})
+  });
+  const row = document.getElementById(`row-${id}`);
+  // Update border color
+  row.className = row.className.replace(/status-\S+/, `status-${status}`);
+  if (status === 'passed') row.style.opacity = '0.55';
+  else row.style.opacity = '';
+  // Update active button
+  row.querySelectorAll('.status-btn').forEach(btn => btn.classList.remove('active-status'));
+  event.target.classList.add('active-status');
+}
+
+async function saveNotes(id, textarea) {
+  const notes = textarea.value;
+  await fetch(`/listings/${id}/notes`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({notes})
+  });
+  const flash = document.getElementById(`saved-${id}`);
+  flash.classList.add('show');
+  setTimeout(() => flash.classList.remove('show'), 1500);
+}
+</script>
+
+</body>
+</html>
