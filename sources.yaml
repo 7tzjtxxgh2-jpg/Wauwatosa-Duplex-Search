@@ -1,37 +1,28 @@
-# Craigslist RSS feeds — safe-harbor for personal use polling
-craigslist_rss:
+# Craigslist HTML search — RSS is blocked at IP level; HTML search returns 200 with good structure
+craigslist_html:
   - name: craigslist_wauwatosa
-    url: "https://milwaukee.craigslist.org/search/apa?query=wauwatosa&format=rss"
+    url: "https://milwaukee.craigslist.org/search/apa?query=wauwatosa"
   - name: craigslist_duplex
-    url: "https://milwaukee.craigslist.org/search/apa?query=duplex&format=rss"
+    url: "https://milwaukee.craigslist.org/search/apa?query=duplex"
   - name: craigslist_zip_53213
-    url: "https://milwaukee.craigslist.org/search/apa?postal=53213&search_distance=3&format=rss"
+    url: "https://milwaukee.craigslist.org/search/apa?postal=53213&search_distance=3"
   - name: craigslist_zip_53226
-    url: "https://milwaukee.craigslist.org/search/apa?postal=53226&search_distance=3&format=rss"
+    url: "https://milwaukee.craigslist.org/search/apa?postal=53226&search_distance=3"
   - name: craigslist_rooms
-    url: "https://milwaukee.craigslist.org/search/roo?format=rss"
+    url: "https://milwaukee.craigslist.org/search/roo"
 
 # Small PM and boutique sites — public HTML, polite scraping
 html_sites:
   - name: wauwatosa_duplex
     url: "https://www.wauwatosaduplex.com/info/"
     listing_selector: "div.entry-content"
+    verify_ssl: false          # site uses a self-signed cert
     note: "Krista Crowder boutique broker; highest Tosa duplex specificity"
-
-  - name: shorewest
-    url: "https://www.shorewest.com/rentals?city=Wauwatosa"
-    listing_selector: "div.listing-item, div.property-card"
-    note: "Founded as Wauwatosa Realty in 1946; strong Tosa MLS share"
 
   - name: mpi_property
     url: "https://www.mpiwi.com"
     listing_selector: "div.vacancy, div.available-unit, div.listing"
     note: "1,100+ units in SE Wisconsin including duplexes"
-
-  - name: renu_property
-    url: "https://www.renupropertymgt.com"
-    listing_selector: "div.listing, div.property, article"
-    note: "Confirmed Tosa duplexes e.g. 8415 Stickney Ave"
 
   - name: atari_property
     url: "https://www.ataripropertymanagement.com"
@@ -48,11 +39,6 @@ html_sites:
     listing_selector: "div.listing, div.unit, tr.vacancy"
     note: "Tosa coverage confirmed; some duplexes"
 
-  - name: ogden_rentals
-    url: "https://www.rentalsogdenrent.com"
-    listing_selector: "div.listing, div.property, article"
-    note: "Founded 1929; lists duplexes and single-family"
-
   - name: uwm_marketplace
     url: "https://rentoffcampus.uwm.edu/listing"
     listing_selector: "div.listing-item, div.property-card, article"
@@ -67,3 +53,10 @@ html_sites:
     url: "https://www.rentcollegepads.com/off-campus-housing/medical-college-wisconsin/search"
     listing_selector: "div.listing-card, div.property-card, article"
     note: "188+ listings near Froedtert/MCW; heaviest Tosa concentration"
+
+# Blocked by Cloudflare — monitor via email alerts instead
+# shorewest: https://www.shorewest.com/rentals
+# ogden:     https://www.rentalsogdenrent.com
+
+# Domain no longer resolves — removed
+# renu: https://www.renupropertymgt.com
