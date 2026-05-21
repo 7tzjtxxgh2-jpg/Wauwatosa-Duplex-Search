@@ -1,0 +1,69 @@
+# Craigslist RSS feeds — safe-harbor for personal use polling
+craigslist_rss:
+  - name: craigslist_wauwatosa
+    url: "https://milwaukee.craigslist.org/search/apa?query=wauwatosa&format=rss"
+  - name: craigslist_duplex
+    url: "https://milwaukee.craigslist.org/search/apa?query=duplex&format=rss"
+  - name: craigslist_zip_53213
+    url: "https://milwaukee.craigslist.org/search/apa?postal=53213&search_distance=3&format=rss"
+  - name: craigslist_zip_53226
+    url: "https://milwaukee.craigslist.org/search/apa?postal=53226&search_distance=3&format=rss"
+  - name: craigslist_rooms
+    url: "https://milwaukee.craigslist.org/search/roo?format=rss"
+
+# Small PM and boutique sites — public HTML, polite scraping
+html_sites:
+  - name: wauwatosa_duplex
+    url: "https://www.wauwatosaduplex.com/info/"
+    listing_selector: "div.entry-content"
+    note: "Krista Crowder boutique broker; highest Tosa duplex specificity"
+
+  - name: shorewest
+    url: "https://www.shorewest.com/rentals?city=Wauwatosa"
+    listing_selector: "div.listing-item, div.property-card"
+    note: "Founded as Wauwatosa Realty in 1946; strong Tosa MLS share"
+
+  - name: mpi_property
+    url: "https://www.mpiwi.com"
+    listing_selector: "div.vacancy, div.available-unit, div.listing"
+    note: "1,100+ units in SE Wisconsin including duplexes"
+
+  - name: renu_property
+    url: "https://www.renupropertymgt.com"
+    listing_selector: "div.listing, div.property, article"
+    note: "Confirmed Tosa duplexes e.g. 8415 Stickney Ave"
+
+  - name: atari_property
+    url: "https://www.ataripropertymanagement.com"
+    listing_selector: "div.listing, div.property, article"
+    note: "Family-owned, single-family/duplexes/multi-unit, uses AppFolio"
+
+  - name: welcome_home_milwaukee
+    url: "https://whmilwaukee.com"
+    listing_selector: "div.listing, div.property, article"
+    note: "Scattered-site PM, formerly MKE PM + REIS"
+
+  - name: bieck_management
+    url: "https://bieck.twa.rentmanager.com"
+    listing_selector: "div.listing, div.unit, tr.vacancy"
+    note: "Tosa coverage confirmed; some duplexes"
+
+  - name: ogden_rentals
+    url: "https://www.rentalsogdenrent.com"
+    listing_selector: "div.listing, div.property, article"
+    note: "Founded 1929; lists duplexes and single-family"
+
+  - name: uwm_marketplace
+    url: "https://rentoffcampus.uwm.edu/listing"
+    listing_selector: "div.listing-item, div.property-card, article"
+    note: "Public UWM off-campus board; includes west-side Tosa-adjacent"
+
+  - name: rent_college_pads_marquette
+    url: "https://www.rentcollegepads.com/off-campus-housing/marquette/search"
+    listing_selector: "div.listing-card, div.property-card, article"
+    note: "~105 listings extending west into Tosa"
+
+  - name: rent_college_pads_mcw
+    url: "https://www.rentcollegepads.com/off-campus-housing/medical-college-wisconsin/search"
+    listing_selector: "div.listing-card, div.property-card, article"
+    note: "188+ listings near Froedtert/MCW; heaviest Tosa concentration"
