@@ -11,7 +11,7 @@ craigslist_html:
   - name: craigslist_rooms
     url: "https://milwaukee.craigslist.org/search/roo"
 
-# Small PM and boutique sites — public HTML, polite scraping
+# Static HTML sites — scrapeable with plain HTTP
 html_sites:
   - name: wauwatosa_duplex
     url: "https://www.wauwatosaduplex.com/info/"
@@ -19,44 +19,24 @@ html_sites:
     verify_ssl: false          # site uses a self-signed cert
     note: "Krista Crowder boutique broker; highest Tosa duplex specificity"
 
-  - name: mpi_property
-    url: "https://www.mpiwi.com"
-    listing_selector: "div.vacancy, div.available-unit, div.listing"
-    note: "1,100+ units in SE Wisconsin including duplexes"
-
-  - name: atari_property
-    url: "https://www.ataripropertymanagement.com"
-    listing_selector: "div.listing, div.property, article"
-    note: "Family-owned, single-family/duplexes/multi-unit, uses AppFolio"
-
-  - name: welcome_home_milwaukee
-    url: "https://whmilwaukee.com"
-    listing_selector: "div.listing, div.property, article"
-    note: "Scattered-site PM, formerly MKE PM + REIS"
-
-  - name: bieck_management
-    url: "https://bieck.twa.rentmanager.com"
-    listing_selector: "div.listing, div.unit, tr.vacancy"
-    note: "Tosa coverage confirmed; some duplexes"
-
   - name: uwm_marketplace
     url: "https://rentoffcampus.uwm.edu/listing"
     listing_selector: "div.listing-item, div.property-card, article"
     note: "Public UWM off-campus board; includes west-side Tosa-adjacent"
 
-  - name: rent_college_pads_marquette
-    url: "https://www.rentcollegepads.com/off-campus-housing/marquette/search"
-    listing_selector: "div.listing-card, div.property-card, article"
-    note: "~105 listings extending west into Tosa"
+# JavaScript-rendered — listings only load after JS executes; check manually
+# atari:              https://www.ataripropertymanagement.com
+# welcome_home_mkw:   https://whmilwaukee.com/rentals
+# mpi_property:       https://www.mpiwi.com
+# rent_college_pads:  https://www.rentcollegepads.com/off-campus-housing/medical-college-wisconsin/search
+# rent_college_pads:  https://www.rentcollegepads.com/off-campus-housing/marquette/search
 
-  - name: rent_college_pads_mcw
-    url: "https://www.rentcollegepads.com/off-campus-housing/medical-college-wisconsin/search"
-    listing_selector: "div.listing-card, div.property-card, article"
-    note: "188+ listings near Froedtert/MCW; heaviest Tosa concentration"
+# Login-walled
+# bieck: https://bieck.twa.rentmanager.com
 
 # Blocked by Cloudflare — monitor via email alerts instead
 # shorewest: https://www.shorewest.com/rentals
 # ogden:     https://www.rentalsogdenrent.com
 
-# Domain no longer resolves — removed
+# Domain no longer resolves
 # renu: https://www.renupropertymgt.com

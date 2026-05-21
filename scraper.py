@@ -28,6 +28,19 @@ DUPLEX_KEYWORDS = {
     "upper unit", "lower unit", "upper flat", "lower flat",
 }
 
+LISTING_KEYWORDS = {
+    "bed", "br", "bath", "rent", "lease", "apartment", "duplex", "upper",
+    "lower", "flat", "studio", "room", "available", "month",
+}
+
+NON_LISTING_PHRASES = {
+    "sign in", "log in", "login", "register", "contact us", "about us",
+    "our services", "property management", "owner portal", "tenant portal",
+    "resident portal", "application policy", "onboarding", "eviction guarantee",
+    "management agreement", "lease only", "accounting", "maintenance", "insurance",
+    "investors", "services", "faqs", "privacy policy", "terms of service",
+}
+
 NEIGHBORHOOD_PATTERNS = [
     (r"\bwauwatosa\b", "Wauwatosa"),
     (r"\bwashington heights\b", "Washington Heights"),
@@ -87,6 +100,23 @@ def blank_listing(source: str, url: str) -> dict:
         "duplex_flag": 0,
         "raw_data": None,
     }
+
+
+def is_likely_listing(text: str) -> bool:
+    """Return True only if text looks like a rental listing, not a nav/marketing item."""
+    lower = text.lower()
+    # Must have a price OR at least two rental keywords
+    has_price = bool(re.search(r"\$\s*\d+", text))
+    keyword_hits = sum(1 for kw in LISTING_KEYWORDS if kw in lower)
+    if not has_price and keyword_hits < 2:
+        return False
+    # Reject known non-listing phrases
+    if any(phrase in lower for phrase in NON_LISTING_PHRASES):
+        return False
+    # Reject very short items (nav links) and very long items (full page dumps)
+    if len(text) < 30 or len(text) > 3000:
+        return False
+    return True
 
 
 def resolve_href(href: str, base_url: str) -> str:
@@ -193,9 +223,11 @@ def scrape_html_site(source_name: str, url: str, listing_selector: str, verify_s
         elements = soup.find_all(["article", "li", "tr"], limit=50)
 
     listings = []
+    skipped = 0
     for el in elements:
         text = el.get_text(" ", strip=True)
-        if not text or len(text) < 20:
+        if not is_likely_listing(text):
+            skipped += 1
             continue
 
         link = el.find("a", href=True)
@@ -211,7 +243,7 @@ def scrape_html_site(source_name: str, url: str, listing_selector: str, verify_s
         listing["raw_data"] = json.dumps({"raw_text": text[:1000], "source_url": url})
         listings.append(listing)
 
-    print(f"    → {len(listings)} elements found")
+    print(f"    → {len(listings)} listings ({skipped} non-listings skipped)")
     return listings
 
 
