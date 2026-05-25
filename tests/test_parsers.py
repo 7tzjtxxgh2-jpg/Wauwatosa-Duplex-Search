@@ -6,6 +6,8 @@ from scraper import (
     extract_rent,
     extract_beds,
     is_likely_listing,
+    is_residential_rental,
+    classify_non_rental,
     resolve_href,
 )
 
@@ -111,6 +113,64 @@ class TestIsLikelyListing:
         assert is_likely_listing(
             "Spacious bedroom available with lease, monthly rent flexible"
         ) is True
+
+
+class TestNonRentalFilter:
+    # ---- Things that should be REJECTED -----------------------------------
+    @pytest.mark.parametrize("text,expected_label", [
+        ("Live In Caregiver Wanted - Free housing", "caregiver job"),
+        ("Live-in nanny wanted, room provided",     "live-in job"),
+        ("Seeking a companion to hangout with",     "personals"),
+        ("Seeking SWF for relationship",            "personals"),
+        ("ISO room near downtown",                  "ISO post"),
+        ("In search of a room to rent in Tosa",     "ISO post"),
+        ("Salon chair rental - prime location",     "salon space"),
+        ("Hair stylist booth available",            "salon space"),
+        ("Massage room for rent, private entrance", "wellness space"),
+        ("Wellness studio space available",         "wellness space"),
+        ("Office space for rent in downtown",       "office space"),
+        ("Professional suite for lease",            "professional office"),
+        ("Commercial space available",              "commercial space"),
+        ("Retail location for rent",                "commercial space"),
+        ("Storefront available, high traffic",      "storefront"),
+        ("Coworking desk available",                "coworking"),
+        ("Event venue for rent - weddings welcome", "event space"),
+        ("Yoga studio for rent, fully equipped",    "fitness studio"),
+    ])
+    def test_rejects_non_rentals(self, text, expected_label):
+        label = classify_non_rental(text)
+        assert label == expected_label, (
+            f"expected {expected_label!r}, got {label!r} for {text!r}"
+        )
+        assert not is_residential_rental(text)
+
+    # ---- Critical: things that should NOT be rejected (false-positive guards) ----
+    @pytest.mark.parametrize("text", [
+        # Real listings we saw in the DB that "sound" commercial
+        "Wauwatosa 2 Bdrm, 1.5 Bath Near MCW",
+        "Primary suite with walk-in closet, en suite bath",
+        "Located near the thriving business district of Tosa Village",
+        "Large 2-room master suite + private bathroom in quiet suburban house",
+        "Furnished room in quiet apartment, close to wellness center and yoga studio",
+        "Spacious 2 bedroom near the salon and coffee shop on Brady",
+        "Beautiful studio apartment, heat included",
+        "Office in the spare bedroom — perfect work-from-home setup",
+        "Looking for a roommate - $800/mo includes utilities",
+        # ISO-adjacent but not ISO
+        "Roommate wanted for 2BR apartment",
+        # Commercial-keyword-but-residential
+        "Quiet building with a barber on the ground floor",
+        "Walking distance to massage therapist and yoga classes",
+    ])
+    def test_accepts_residential(self, text):
+        label = classify_non_rental(text)
+        assert label is None, f"rejected {text!r} as {label!r} — false positive"
+        assert is_residential_rental(text)
+
+    def test_empty_text_is_residential(self):
+        # Don't reject a listing just because we have no text to check yet
+        assert is_residential_rental("") is True
+        assert is_residential_rental(None) is True
 
 
 class TestResolveHref:

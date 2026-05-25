@@ -156,6 +156,12 @@ def mark_description_failed(listing_id: int) -> None:
         )
 
 
+def delete_listing(listing_id: int) -> None:
+    """Permanently remove a listing (used to clean out non-rental noise)."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
+
+
 # ---------------------------------------------------------------------------
 # Reads
 # ---------------------------------------------------------------------------

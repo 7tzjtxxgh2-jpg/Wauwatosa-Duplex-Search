@@ -24,6 +24,7 @@ from db import (
     update_description,
     mark_description_failed,
     get_listings_needing_description,
+    delete_listing,
 )
 
 # Craigslist tolerates a real browser UA; a custom UA triggers 403 on search.
@@ -54,6 +55,48 @@ NON_LISTING_PHRASES = {
     "management agreement", "lease only", "accounting", "maintenance", "insurance",
     "investors", "services", "faqs", "privacy policy", "terms of service",
 }
+
+# Patterns that indicate the post is NOT a residential rental offering.
+# Each tuple is (compiled-pattern-source, label-for-logging).
+# Tested against both titles and descriptions; one match → reject.
+NON_RENTAL_PATTERNS = [
+    # ---- Job postings disguised as housing -----------------------------------
+    (r"\bcaregiver\s+(wanted|needed|position|opportunity)\b",   "caregiver job"),
+    (r"\blive[-\s]?in\s+(caregiver|nanny|babysitter|au\s*pair|housekeeper)\b",
+                                                                  "live-in job"),
+    (r"\b(nanny|au\s*pair|housekeeper)\s+(wanted|needed)\b",     "domestic job"),
+
+    # ---- Personals / non-housing -------------------------------------------
+    (r"\bseeking\s+(a\s+)?(companion|friend|partner|relationship|romance|date|hookup|woman|man|swf|swm|female|male)\b",
+                                                                  "personals"),
+    (r"\b(friend\s+with\s+benefits|fwb)\b",                       "personals"),
+
+    # ---- ISO (in-search-of) posts -------------------------------------------
+    (r"^\s*iso\b",                                                "ISO post"),
+    (r"\bin\s+search\s+of\b.*\b(room|apartment|housing|place|sublet)\b",
+                                                                  "ISO post"),
+
+    # ---- Commercial / business spaces ---------------------------------------
+    (r"\b(salon|barber|stylist)\s+(chair|booth|station|suite)\b", "salon space"),
+    (r"\b(massage|treatment|therapy|reiki|healing|wellness)\s+(room|space|studio\s+space|studio|practice)\s+(rental|for\s+rent|available|lease)\b",
+                                                                  "wellness space"),
+    (r"\boffice\s+(space|suite)\s+(for\s+rent|for\s+lease|available)\b",
+                                                                  "office space"),
+    (r"\bprofessional\s+(office|suite)\s+(for\s+rent|for\s+lease|available)\b",
+                                                                  "professional office"),
+    (r"\b(commercial|retail)\s+(space|property|location|unit|rental)\b",
+                                                                  "commercial space"),
+    (r"\bstorefront\b",                                           "storefront"),
+    (r"\bco-?working\b",                                          "coworking"),
+    (r"\bevent\s+(space|venue)\s+(for\s+rent|available|rental)\b","event space"),
+    (r"\b(chair|booth)\s+rental\b",                               "chair/booth rental"),
+    (r"\b(yoga|fitness|pilates|dance|workout)\s+studio\s+(for\s+rent|space\s+available|rental)\b",
+                                                                  "fitness studio"),
+]
+
+# Pre-compile for speed
+_NON_RENTAL_RE = [(re.compile(p, re.I), label) for p, label in NON_RENTAL_PATTERNS]
+
 
 NEIGHBORHOOD_PATTERNS = [
     (r"\bwauwatosa\b", "Wauwatosa"),
@@ -95,6 +138,25 @@ def extract_rent(text: str) -> int | None:
 def extract_beds(text: str) -> str | None:
     match = re.search(r"(\d+)\s*(?:br|bed|bedroom)", text, re.I)
     return match.group(1) if match else None
+
+
+def classify_non_rental(text: str) -> str | None:
+    """
+    Check if text matches any non-rental pattern (commercial, ISO, job, personals).
+    Returns the label of the matched pattern, or None if the text looks like
+    a real residential rental listing.
+    """
+    if not text:
+        return None
+    for regex, label in _NON_RENTAL_RE:
+        if regex.search(text):
+            return label
+    return None
+
+
+def is_residential_rental(text: str) -> bool:
+    """Convenience boolean wrapper around classify_non_rental."""
+    return classify_non_rental(text) is None
 
 
 def is_likely_listing(text: str) -> bool:
@@ -160,6 +222,12 @@ def parse_craigslist_search(html: str, source_name: str, base_url: str) -> list[
         price_text = price_el.get_text(strip=True) if price_el else ""
         location = loc_el.get_text(strip=True) if loc_el else ""
 
+        # Reject obvious non-rentals at the title stage (ISO posts, jobs, personals).
+        # Commercial listings often only show up in the description, so those are
+        # caught after detail-page enrichment.
+        if classify_non_rental(title):
+            continue
+
         full_text = f"{title} {price_text} {location}"
 
         listing = blank_listing(source_name, href)
@@ -217,15 +285,19 @@ def scrape_craigslist(client: httpx.Client, source_name: str, url: str) -> list[
     return listings
 
 
-def enrich_craigslist_details(client: httpx.Client, limit: int = DETAIL_MAX_PER_RUN) -> int:
-    """Fetch Craigslist detail pages for any listings flagged description_fetched=0."""
+def enrich_craigslist_details(client: httpx.Client, limit: int = DETAIL_MAX_PER_RUN) -> tuple[int, int]:
+    """
+    Fetch Craigslist detail pages for any listings flagged description_fetched=0.
+    Returns (n_enriched, n_filtered_as_commercial_or_other).
+    """
     pending = get_listings_needing_description("craigslist_")
     if not pending:
-        return 0
+        return (0, 0)
 
     n_to_fetch = min(len(pending), limit)
     print(f"\nEnriching {n_to_fetch} Craigslist detail pages (of {len(pending)} pending)…")
     fetched = 0
+    rejected = 0
     for row in pending[:limit]:
         try:
             resp = client.get(
@@ -234,11 +306,20 @@ def enrich_craigslist_details(client: httpx.Client, limit: int = DETAIL_MAX_PER_
                 timeout=15,
             )
             if resp.status_code == 404:
-                # Listing was deleted between search and detail fetch
                 mark_description_failed(row["id"])
                 continue
             resp.raise_for_status()
             details = parse_craigslist_detail(resp.text)
+
+            # Post-enrichment filter: now that we have the body text, re-check
+            # whether this is actually a residential rental.
+            label = classify_non_rental(details["description"])
+            if label:
+                print(f"    × dropping (non-rental: {label}): {row['url']}")
+                delete_listing(row["id"])
+                rejected += 1
+                continue
+
             update_description(
                 row["id"],
                 details["description"],
@@ -248,10 +329,35 @@ def enrich_craigslist_details(client: httpx.Client, limit: int = DETAIL_MAX_PER_
             fetched += 1
         except Exception as e:
             print(f"    ! {row['url'][:60]}… — {e}")
-            # Don't mark failed on transient errors; let next run retry
         time.sleep(DETAIL_FETCH_DELAY)
-    print(f"    → enriched {fetched}/{n_to_fetch}")
-    return fetched
+    print(f"    → enriched {fetched}/{n_to_fetch} (dropped {rejected} non-rentals)")
+    return (fetched, rejected)
+
+
+def clean_existing_non_rentals() -> int:
+    """
+    Retroactive cleanup: scan existing listings, delete any whose title or
+    description matches a non-rental pattern. Run once after deploying the
+    filter; subsequent scrapes will not insert non-rentals to begin with.
+    """
+    from db import get_listings  # local import to avoid cycle at import time
+    all_listings = get_listings()
+    deleted = 0
+    by_label: dict[str, int] = {}
+    for l in all_listings:
+        text = (l.get("title") or "") + " " + (l.get("description") or "")
+        label = classify_non_rental(text)
+        if label:
+            delete_listing(l["id"])
+            deleted += 1
+            by_label[label] = by_label.get(label, 0) + 1
+    if deleted:
+        print(f"\nCleanup: removed {deleted} non-rental listings")
+        for label, n in sorted(by_label.items(), key=lambda x: -x[1]):
+            print(f"  {n:>3} × {label}")
+    else:
+        print("\nCleanup: no non-rental listings to remove.")
+    return deleted
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +401,9 @@ def scrape_html_site(
     for el in elements:
         text = el.get_text(" ", strip=True)
         if not is_likely_listing(text):
+            skipped += 1
+            continue
+        if classify_non_rental(text):
             skipped += 1
             continue
 
@@ -355,8 +464,13 @@ def run():
                     total_reseen += 1
             time.sleep(REQUEST_DELAY)
 
-        # Enrich Craigslist with detail pages
+        # Enrich Craigslist with detail pages; this also drops non-rentals
+        # that only become visible once we have the body text.
         enrich_craigslist_details(client)
+
+    # Retroactive sweep — catches anything that pre-dated the filter or
+    # whose description was already fetched in an earlier run.
+    clean_existing_non_rentals()
 
     print(f"\nDone. {total_new} new listings, {total_reseen} re-sighted.")
 
