@@ -31,6 +31,7 @@ def make_listing(url: str = "https://example.com/a", **overrides) -> dict:
         "description": "test",
         "duplex_flag": 0,
         "raw_data": None,
+        "listing_type": "rental",
     }
     base.update(overrides)
     return base

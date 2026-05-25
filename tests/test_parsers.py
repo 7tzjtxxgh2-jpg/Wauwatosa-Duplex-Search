@@ -9,6 +9,7 @@ from scraper import (
     is_residential_rental,
     classify_non_rental,
     classify_out_of_scope,
+    classify_listing_type,
     is_in_scope,
     resolve_href,
 )
@@ -298,6 +299,50 @@ class TestGeographicFilter:
     def test_empty_inputs(self):
         assert classify_out_of_scope("", "") is None
         assert classify_out_of_scope(None, None) is None  # type: ignore
+
+
+class TestListingTypeClassifier:
+    # ---- Should be classified as 'roommate' --------------------------------
+    @pytest.mark.parametrize("title,description,source", [
+        ("Looking for a roommate",                       "",  ""),
+        ("Roommate wanted for 2BR apartment",            "",  ""),
+        ("Seeking a housemate",                          "",  ""),
+        ("Need a roommate ASAP",                         "",  ""),
+        ("Share my apartment",                           "",  ""),
+        ("Room in my 3BR home",                          "",  ""),
+        ("Spare bedroom available in my house",          "",  ""),
+        ("Bedroom",
+         "Furnished bedroom available in shared kitchen and bath. I live here too.",
+         "craigslist_rooms"),
+        ("Room for rent",
+         "Bedroom for rent in my home with one other person",
+         ""),
+        # Source-based default for craigslist_rooms (no roommate keywords in title)
+        ("Cozy Furnished Room",                          "",  "craigslist_rooms"),
+        ("Private Room Near Downtown",                   "",  "craigslist_rooms"),
+    ])
+    def test_classifies_as_roommate(self, title, description, source):
+        assert classify_listing_type(title, description, source) == "roommate"
+
+    # ---- Should be classified as 'rental' (full unit) ----------------------
+    @pytest.mark.parametrize("title,description,source", [
+        ("2BR upper duplex in Tosa",                "", "craigslist_duplex"),
+        ("Wauwatosa 2 Bdrm, 1.5 Bath Near MCW",     "", "craigslist_wauwatosa"),
+        ("Spacious Studio in West Allis",           "", "craigslist_duplex"),
+        ("Updated 1BR apartment, $1100",            "", "craigslist_wauwatosa"),
+        ("Lower 3 Bedroom Duplex",                  "", "craigslist_duplex"),
+        # Whole-unit sublease in rooms category — should override default
+        ("Subleasing my 1BR apartment May-Aug",     "", "craigslist_rooms"),
+        ("Whole unit available for rent",           "", "craigslist_rooms"),
+        # PM site listings default to rental
+        ("Updated unit on Stickney Ave",            "", "wauwatosa_duplex"),
+        ("Apartment available August",              "", "uwm_marketplace"),
+    ])
+    def test_classifies_as_rental(self, title, description, source):
+        assert classify_listing_type(title, description, source) == "rental"
+
+    def test_empty_inputs_default_to_rental(self):
+        assert classify_listing_type("", "", "") == "rental"
 
 
 class TestResolveHref:

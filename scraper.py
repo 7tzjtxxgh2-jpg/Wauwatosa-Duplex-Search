@@ -22,6 +22,7 @@ from db import (
     init_db,
     upsert_listing,
     update_description,
+    update_listing_type,
     mark_description_failed,
     get_listings_needing_description,
     delete_listing,
@@ -171,6 +172,73 @@ OUT_OF_SCOPE_ZIPS = {
     "53217",  # Whitefish Bay
 }
 _OOS_ZIP_RE = re.compile(rf"\b({'|'.join(OUT_OF_SCOPE_ZIPS)})\b")
+
+
+# ----------------------------------------------------------------------------
+# Listing-type classifier: distinguishes
+#   - 'rental'   = full unit for rent (apartment, duplex, house, etc.)
+#   - 'roommate' = someone seeking a roommate to share their existing dwelling
+# ----------------------------------------------------------------------------
+ROOMMATE_PATTERNS = [
+    # Explicit "looking for roommate" language
+    r"\b(looking\s+for|seeking|need|want|wanted|find|finding)\s+(a\s+)?(roommate|housemate|room\s*mate)\b",
+    r"\b(roommate|housemate|room\s*mate)\s+(wanted|needed|sought)\b",
+    # "Share my place" language
+    r"\bshare\s+(my|our|the|a)\s+(apartment|home|house|condo|place|duplex|space|unit)\b",
+    r"\broom\s+(in\s+)?(my|our)\s+(apartment|home|house|condo|duplex|\d+\s*br)\b",
+    r"\b(spare|extra|available)\s+(room|bedroom)\s+(in\s+)?(my|our)\b",
+    r"\bshared\s+(kitchen|bathroom|bath|living|home|space|house|apartment)\b",
+    r"\b(join|fit\s+in\s+with)\s+(my|our)\s+(home|house|apartment|household)\b",
+    r"\blive\s+with\s+(me|us)\b",
+    r"\bi\s+(live|own|rent|reside|am\s+living|am\s+renting)\s+(here|in\s+(this|my))\b",
+    # "Room for rent in my X" — common phrasing
+    r"\b(room|bedroom)\s+for\s+rent\s+in\s+(my|our|a\s+shared|the)\b",
+    r"\b(private|furnished)\s+room\s+(in|available)\s+(my|our|a\s+shared)\b",
+    # "(something) in my home/house/apartment" — strong roommate signal
+    # because landlords listing a unit they don't live in don't say "my home"
+    r"\b(in|at|of)\s+(my|our)\s+(house|home|apartment|condo|duplex|place|unit)\b",
+]
+_ROOMMATE_RE = [re.compile(p, re.I) for p in ROOMMATE_PATTERNS]
+
+WHOLE_UNIT_PATTERNS = [
+    # Even in the rooms category, these signal a full-unit sublease
+    r"\bsubleas(ing|e)\s+(my|the|a)\s+(apartment|unit|studio|\d+\s*(br|bed|bedroom))\b",
+    r"\b(whole|entire)\s+(unit|apartment|home|house|duplex|floor)\b",
+    r"\b\d+\s*(br|bed|bedroom)\s+(apartment|unit|duplex|condo|flat)\s+for\s+rent\b",
+    r"\bfull\s+apartment\s+(for\s+rent|available)\b",
+]
+_WHOLE_UNIT_RE = [re.compile(p, re.I) for p in WHOLE_UNIT_PATTERNS]
+
+
+def classify_listing_type(title: str, description: str = "", source: str = "") -> str:
+    """
+    Return 'roommate' if the post is by someone seeking a roommate to share
+    their existing dwelling; otherwise return 'rental'.
+
+    Strategy:
+      1. Explicit "whole-unit" language (sublease entire apt, etc.) → rental
+      2. Explicit roommate language → roommate
+      3. Source-based default: craigslist_rooms is Craigslist's "rooms &
+         shared" category, so absent other signals → roommate
+      4. Everything else → rental
+    """
+    text = f"{title or ''} {description or ''}"
+
+    # Whole-unit signals win first — handles "Subleasing my 1BR" in rooms category
+    for rx in _WHOLE_UNIT_RE:
+        if rx.search(text):
+            return "rental"
+
+    # Then explicit roommate language
+    for rx in _ROOMMATE_RE:
+        if rx.search(text):
+            return "roommate"
+
+    # Source-based default
+    if source == "craigslist_rooms":
+        return "roommate"
+
+    return "rental"
 
 
 NEIGHBORHOOD_PATTERNS = [
@@ -349,6 +417,7 @@ def blank_listing(source: str, url: str) -> dict:
         "description": None,
         "duplex_flag": 0,
         "raw_data": None,
+        "listing_type": "rental",
     }
 
 
@@ -396,6 +465,7 @@ def parse_craigslist_search(html: str, source_name: str, base_url: str) -> list[
         listing["rent"] = extract_rent(price_text) or extract_rent(full_text)
         listing["beds"] = extract_beds(title)
         listing["description"] = None  # filled in by detail-page fetch
+        listing["listing_type"] = classify_listing_type(title, "", source_name)
         listing["raw_data"] = json.dumps({
             "title": title,
             "price": price_text,
@@ -495,6 +565,11 @@ def enrich_craigslist_details(client: httpx.Client, limit: int = DETAIL_MAX_PER_
                 address=details["address"],
                 available_date=details["available_date"],
             )
+            # Re-classify listing_type now that we have the full body text
+            new_type = classify_listing_type(
+                row.get("title") or "", details["description"], row["source"]
+            )
+            update_listing_type(row["id"], new_type)
             fetched += 1
         except Exception as e:
             print(f"    ! {row['url'][:60]}… — {e}")
@@ -527,6 +602,30 @@ def clean_existing_non_rentals() -> int:
     else:
         print("\nCleanup: no non-rental listings to remove.")
     return deleted
+
+
+def backfill_listing_types() -> dict[str, int]:
+    """
+    Recompute listing_type for all existing rows based on current title +
+    description + source. Used once after schema migration to populate the
+    new column for legacy data.
+    """
+    from db import get_listings
+    all_listings = get_listings()
+    counts = {"rental": 0, "roommate": 0, "changed": 0}
+    for l in all_listings:
+        new_type = classify_listing_type(
+            l.get("title") or "",
+            l.get("description") or "",
+            l.get("source") or "",
+        )
+        if l.get("listing_type") != new_type:
+            update_listing_type(l["id"], new_type)
+            counts["changed"] += 1
+        counts[new_type] += 1
+    print(f"\nBackfill: {counts['rental']} rentals, {counts['roommate']} roommate posts "
+          f"({counts['changed']} rows updated)")
+    return counts
 
 
 def clean_out_of_scope_listings() -> int:
@@ -627,6 +726,7 @@ def scrape_html_site(
         listing["duplex_flag"] = int(detect_duplex(text))
         listing["rent"] = extract_rent(text)
         listing["beds"] = extract_beds(text)
+        listing["listing_type"] = classify_listing_type(listing["title"], text, source_name)
         listing["raw_data"] = json.dumps({"raw_text": text[:1000], "source_url": url})
         listings.append(listing)
 

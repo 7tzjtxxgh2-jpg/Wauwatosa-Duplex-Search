@@ -40,6 +40,8 @@
     .badge-sm { font-size: 0.68rem; padding: 2px 6px; }
     .badge-duplex { background-color: #198754; }
     .badge-source { background-color: #6c757d; }
+    .badge-roommate { background-color: #6f42c1; }
+    .badge-rental { background-color: #0d6efd; }
 
     .status-btn { font-size: 0.72rem; padding: 2px 8px; white-space: nowrap; }
     .status-btn.is-active { font-weight: 700; box-shadow: inset 0 0 0 2px rgba(0,0,0,.2); }
@@ -118,6 +120,22 @@
       </div>
 
       <div class="col-auto">
+        <div class="btn-group btn-group-sm">
+          <a href="?{% if filters.status %}status={{ filters.status }}{% endif %}"
+             class="btn btn-outline-secondary {{ 'active' if not filters.type }}">All types</a>
+          <a href="?type=rental{% if filters.status %}&status={{ filters.status }}{% endif %}"
+             class="btn btn-outline-primary {{ 'active' if filters.type == 'rental' }}">
+            Rentals <span class="count-chip">{{ type_counts.rental }}</span>
+          </a>
+          <a href="?type=roommate{% if filters.status %}&status={{ filters.status }}{% endif %}"
+             class="btn btn-outline-secondary {{ 'active' if filters.type == 'roommate' }}"
+             style="border-color:#6f42c1;color:#6f42c1">
+            Roommate <span class="count-chip">{{ type_counts.roommate }}</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="col-auto">
         <select name="source" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="">All sources</option>
           {% for s in sources %}
@@ -187,6 +205,11 @@
           {% endif %}
 
           <div class="d-flex flex-wrap gap-1 align-items-center mt-1">
+            {% if l.listing_type == 'roommate' %}
+            <span class="badge badge-roommate text-white badge-sm">roommate</span>
+            {% else %}
+            <span class="badge badge-rental text-white badge-sm">rental</span>
+            {% endif %}
             <span class="badge badge-source text-white badge-sm">{{ l.source.replace('_', ' ') }}</span>
             {% if l.neighborhood %}
             <span class="badge bg-light text-dark border badge-sm">{{ l.neighborhood }}</span>

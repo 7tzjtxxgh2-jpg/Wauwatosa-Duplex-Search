@@ -49,6 +49,8 @@ MIGRATIONS = [
     ("times_seen", "INTEGER DEFAULT 1", None),
     ("description_fetched", "INTEGER DEFAULT 0",
      "CREATE INDEX IF NOT EXISTS idx_desc_fetched ON listings(description_fetched)"),
+    ("listing_type", "TEXT DEFAULT 'rental'",
+     "CREATE INDEX IF NOT EXISTS idx_listing_type ON listings(listing_type)"),
 ]
 
 
@@ -96,11 +98,11 @@ def upsert_listing(listing: dict) -> bool:
         INSERT INTO listings
             (url, source, title, address, neighborhood, beds, baths,
              rent, available_date, contact, description, duplex_flag,
-             raw_data, last_seen, times_seen)
+             raw_data, listing_type, last_seen, times_seen)
         VALUES
             (:url, :source, :title, :address, :neighborhood, :beds, :baths,
              :rent, :available_date, :contact, :description, :duplex_flag,
-             :raw_data, CURRENT_TIMESTAMP, 1)
+             :raw_data, :listing_type, CURRENT_TIMESTAMP, 1)
         ON CONFLICT(url) DO UPDATE SET
             last_seen  = CURRENT_TIMESTAMP,
             times_seen = times_seen + 1
@@ -211,6 +213,28 @@ def get_status_counts() -> dict:
                 counts[r["status"]] = r["n"]
             counts["total"] += r["n"]
     return counts
+
+
+def get_type_counts() -> dict:
+    """Count listings by listing_type ('rental' / 'roommate')."""
+    counts = {"rental": 0, "roommate": 0}
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT listing_type, COUNT(*) AS n FROM listings GROUP BY listing_type"
+        ).fetchall()
+        for r in rows:
+            if r["listing_type"] in counts:
+                counts[r["listing_type"]] = r["n"]
+    return counts
+
+
+def update_listing_type(listing_id: int, listing_type: str) -> None:
+    """Used by the backfill helper and the post-enrichment re-classifier."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE listings SET listing_type=? WHERE id=?",
+            (listing_type, listing_id),
+        )
 
 
 def get_listings_needing_description(source_prefix: str = "craigslist_") -> list[dict]:

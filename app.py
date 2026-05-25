@@ -21,6 +21,7 @@ from db import (
     get_listing,
     get_sources,
     get_status_counts,
+    get_type_counts,
     update_status,
     update_notes,
 )
@@ -94,6 +95,7 @@ def setup():
 def index():
     status_filter = request.args.get("status", "")
     source_filter = request.args.get("source", "")
+    type_filter = request.args.get("type", "")
     max_rent = request.args.get("max_rent", type=int)
     duplex_only = request.args.get("duplex_only") == "1"
     search = request.args.get("q", "").strip().lower()
@@ -102,6 +104,8 @@ def index():
 
     if source_filter:
         listings = [l for l in listings if l["source"] == source_filter]
+    if type_filter in ("rental", "roommate"):
+        listings = [l for l in listings if l.get("listing_type") == type_filter]
     if max_rent:
         listings = [l for l in listings if l["rent"] and l["rent"] <= max_rent]
     if duplex_only:
@@ -119,9 +123,11 @@ def index():
         listings=listings,
         sources=get_sources(),
         counts=get_status_counts(),
+        type_counts=get_type_counts(),
         filters={
             "status": status_filter,
             "source": source_filter,
+            "type": type_filter,
             "max_rent": max_rent,
             "duplex_only": duplex_only,
             "q": search,
