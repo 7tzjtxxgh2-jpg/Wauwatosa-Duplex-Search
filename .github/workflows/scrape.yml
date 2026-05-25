@@ -1,12 +1,28 @@
-name: Scrape rental listings
+# DORMANT until Railway+Postgres migration.
+#
+# Why: GitHub Actions runners have ephemeral filesystems. Running scraper.py
+# here would scrape successfully but the resulting SQLite file evaporates
+# when the runner shuts down. There is no persistence path that doesn't
+# also conflict with the locally-maintained DB (which currently holds the
+# user's statuses and notes).
+#
+# When the project moves to Railway:
+#   - Switch DB to Railway-hosted Postgres
+#   - Scheduled scraper runs on Railway's cron, writing to that Postgres
+#   - Both the web app and the scraper share the same DB
+#   - Re-enable the schedule trigger below
+#
+# Until then, this workflow is manual-only via workflow_dispatch and is
+# primarily useful as a smoke test: "does my scraper still run?"
+name: Scrape rental listings (dormant)
 
 on:
-  schedule:
-    - cron: "0 */6 * * *"   # every 6 hours
-  workflow_dispatch:          # manual trigger from GitHub UI
+  # schedule:
+  #   - cron: "0 */6 * * *"
+  workflow_dispatch:
 
 jobs:
-  scrape:
+  smoke-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,8 +35,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run scraper
+      - name: Run unit tests
+        run: pytest tests/ -v
+
+      - name: Smoke-test scraper
         env:
-          DB_PATH: rentals.db
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python scraper.py
+          DB_PATH: /tmp/smoke.db
+        run: |
+          python scraper.py
+          echo "Listings collected:"
+          python -c "from db import get_status_counts; print(get_status_counts())"

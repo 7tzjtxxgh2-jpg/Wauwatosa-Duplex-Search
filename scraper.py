@@ -2,10 +2,12 @@
 Chunk 1: Craigslist HTML + small PM site scraper.
 Normalizes all sources to a common schema and upserts into SQLite.
 
-Run manually:  python scraper.py
-Via cron/GH Actions: see .github/workflows/scrape.yml
-"""
+After ingesting search-result pages, fetches each new Craigslist detail page
+once to capture the listing body, address, and posting date.
 
+Run manually:  python scraper.py
+Via cron/GH Actions: see .github/workflows/scrape.yml (currently dormant)
+"""
 from __future__ import annotations
 
 import json
@@ -15,13 +17,25 @@ import yaml
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from db import init_db, upsert_listing
 
-# Craigslist tolerates a real browser UA; custom UA triggers 403 on their search
-BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+from db import (
+    init_db,
+    upsert_listing,
+    update_description,
+    mark_description_failed,
+    get_listings_needing_description,
+)
+
+# Craigslist tolerates a real browser UA; a custom UA triggers 403 on search.
+BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 PM_UA = "wauwatosa-rental-search/1.0 personal-use (contact: jacklaufenberg@icloud.com)"
 
-REQUEST_DELAY = 1.5  # seconds between requests; be polite
+REQUEST_DELAY = 1.5            # between requests to the same site, polite
+DETAIL_FETCH_DELAY = 2.0       # between Craigslist detail-page fetches
+DETAIL_MAX_PER_RUN = 50        # cap detail fetches so a fresh DB doesn't take 30 min
 
 DUPLEX_KEYWORDS = {
     "duplex", "upper", "lower", "flat", "2-family", "two-family",
@@ -55,7 +69,7 @@ NEIGHBORHOOD_PATTERNS = [
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Pure parsing helpers (covered by tests in tests/test_parsers.py)
 # ---------------------------------------------------------------------------
 
 def detect_neighborhood(text: str) -> str | None:
@@ -72,16 +86,36 @@ def detect_duplex(text: str) -> bool:
 
 def extract_rent(text: str) -> int | None:
     match = re.search(r"\$\s*([\d,]+)", text)
-    if match:
-        val = int(match.group(1).replace(",", ""))
-        # Sanity check: ignore implausibly low/high values
-        return val if 300 < val < 10000 else None
-    return None
+    if not match:
+        return None
+    val = int(match.group(1).replace(",", ""))
+    return val if 300 < val < 10000 else None
 
 
 def extract_beds(text: str) -> str | None:
     match = re.search(r"(\d+)\s*(?:br|bed|bedroom)", text, re.I)
     return match.group(1) if match else None
+
+
+def is_likely_listing(text: str) -> bool:
+    """Return True only if text looks like a rental listing."""
+    lower = text.lower()
+    has_price = bool(re.search(r"\$\s*\d+", text))
+    keyword_hits = sum(1 for kw in LISTING_KEYWORDS if kw in lower)
+    if not has_price and keyword_hits < 2:
+        return False
+    if any(phrase in lower for phrase in NON_LISTING_PHRASES):
+        return False
+    if len(text) < 30 or len(text) > 3000:
+        return False
+    return True
+
+
+def resolve_href(href: str, base_url: str) -> str:
+    if href.startswith("http"):
+        return href
+    parsed = urlparse(base_url)
+    return f"{parsed.scheme}://{parsed.netloc}{href}"
 
 
 def blank_listing(source: str, url: str) -> dict:
@@ -102,64 +136,25 @@ def blank_listing(source: str, url: str) -> dict:
     }
 
 
-def is_likely_listing(text: str) -> bool:
-    """Return True only if text looks like a rental listing, not a nav/marketing item."""
-    lower = text.lower()
-    # Must have a price OR at least two rental keywords
-    has_price = bool(re.search(r"\$\s*\d+", text))
-    keyword_hits = sum(1 for kw in LISTING_KEYWORDS if kw in lower)
-    if not has_price and keyword_hits < 2:
-        return False
-    # Reject known non-listing phrases
-    if any(phrase in lower for phrase in NON_LISTING_PHRASES):
-        return False
-    # Reject very short items (nav links) and very long items (full page dumps)
-    if len(text) < 30 or len(text) > 3000:
-        return False
-    return True
-
-
-def resolve_href(href: str, base_url: str) -> str:
-    if href.startswith("http"):
-        return href
-    parsed = urlparse(base_url)
-    return f"{parsed.scheme}://{parsed.netloc}{href}"
-
-
 # ---------------------------------------------------------------------------
-# Craigslist HTML scraper
+# Craigslist scrapers
 # ---------------------------------------------------------------------------
 
-def scrape_craigslist(source_name: str, url: str) -> list[dict]:
-    print(f"  [CL] {source_name}")
-    try:
-        resp = httpx.get(
-            url,
-            headers={"User-Agent": BROWSER_UA},
-            timeout=15,
-            follow_redirects=True,
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"    ! fetch failed: {e}")
-        return []
-
-    soup = BeautifulSoup(resp.text, "lxml")
-    elements = soup.select("li.cl-static-search-result")
-    if not elements:
-        # Fallback for older Craigslist markup
-        elements = soup.select("li.result-row")
+def parse_craigslist_search(html: str, source_name: str, base_url: str) -> list[dict]:
+    """Pure-function parser: given Craigslist search HTML, return listings."""
+    soup = BeautifulSoup(html, "lxml")
+    elements = soup.select("li.cl-static-search-result") or soup.select("li.result-row")
 
     listings = []
     for el in elements:
         link = el.find("a", href=True)
         if not link:
             continue
-        href = resolve_href(link["href"], url)
+        href = resolve_href(link["href"], base_url)
 
         title_el = el.select_one("div.title, span#titletextonly")
         price_el = el.select_one("div.price, span.price")
-        loc_el   = el.select_one("div.location, span.result-hood")
+        loc_el = el.select_one("div.location, span.result-hood")
 
         title = title_el.get_text(strip=True) if title_el else link.get_text(strip=True)
         price_text = price_el.get_text(strip=True) if price_el else ""
@@ -169,56 +164,129 @@ def scrape_craigslist(source_name: str, url: str) -> list[dict]:
 
         listing = blank_listing(source_name, href)
         listing["title"] = title
-        listing["neighborhood"] = detect_neighborhood(full_text) or detect_neighborhood(location)
+        listing["neighborhood"] = (
+            detect_neighborhood(full_text) or detect_neighborhood(location)
+        )
         listing["duplex_flag"] = int(detect_duplex(title))
         listing["rent"] = extract_rent(price_text) or extract_rent(full_text)
         listing["beds"] = extract_beds(title)
-        listing["description"] = title
+        listing["description"] = None  # filled in by detail-page fetch
         listing["raw_data"] = json.dumps({
             "title": title,
             "price": price_text,
             "location": location,
-            "source_url": url,
+            "source_url": base_url,
         })
         listings.append(listing)
+    return listings
 
+
+def parse_craigslist_detail(html: str) -> dict:
+    """Pure-function parser: extract body, address, and posting date."""
+    soup = BeautifulSoup(html, "lxml")
+    body_el = soup.select_one("section#postingbody, #postingbody")
+    description = (
+        body_el.get_text(" ", strip=True) if body_el else ""
+    )
+    # Remove the QR-code preamble Craigslist injects into postingbody
+    description = re.sub(r"QR Code Link to This Post\s*", "", description).strip()
+
+    address_el = soup.select_one("div.mapaddress")
+    address = address_el.get_text(strip=True) if address_el else None
+
+    posted_el = soup.select_one("time.date.timeago, time[datetime]")
+    posted = posted_el.get("datetime") if posted_el else None
+
+    return {
+        "description": description[:2000],  # cap to keep DB rows reasonable
+        "address": address,
+        "available_date": posted,
+    }
+
+
+def scrape_craigslist(client: httpx.Client, source_name: str, url: str) -> list[dict]:
+    print(f"  [CL] {source_name}")
+    try:
+        resp = client.get(url, headers={"User-Agent": BROWSER_UA}, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"    ! fetch failed: {e}")
+        return []
+    listings = parse_craigslist_search(resp.text, source_name, url)
     print(f"    → {len(listings)} listings")
     return listings
+
+
+def enrich_craigslist_details(client: httpx.Client, limit: int = DETAIL_MAX_PER_RUN) -> int:
+    """Fetch Craigslist detail pages for any listings flagged description_fetched=0."""
+    pending = get_listings_needing_description("craigslist_")
+    if not pending:
+        return 0
+
+    n_to_fetch = min(len(pending), limit)
+    print(f"\nEnriching {n_to_fetch} Craigslist detail pages (of {len(pending)} pending)…")
+    fetched = 0
+    for row in pending[:limit]:
+        try:
+            resp = client.get(
+                row["url"],
+                headers={"User-Agent": BROWSER_UA},
+                timeout=15,
+            )
+            if resp.status_code == 404:
+                # Listing was deleted between search and detail fetch
+                mark_description_failed(row["id"])
+                continue
+            resp.raise_for_status()
+            details = parse_craigslist_detail(resp.text)
+            update_description(
+                row["id"],
+                details["description"],
+                address=details["address"],
+                available_date=details["available_date"],
+            )
+            fetched += 1
+        except Exception as e:
+            print(f"    ! {row['url'][:60]}… — {e}")
+            # Don't mark failed on transient errors; let next run retry
+        time.sleep(DETAIL_FETCH_DELAY)
+    print(f"    → enriched {fetched}/{n_to_fetch}")
+    return fetched
 
 
 # ---------------------------------------------------------------------------
 # Generic HTML scraper for PM sites
 # ---------------------------------------------------------------------------
 
-def fetch_html(url: str, verify_ssl: bool = True) -> BeautifulSoup | None:
+def scrape_html_site(
+    client: httpx.Client,
+    source_name: str,
+    url: str,
+    listing_selector: str,
+    verify_ssl: bool = True,
+) -> list[dict]:
+    print(f"  [HTML] {source_name}")
     try:
-        resp = httpx.get(
-            url,
-            headers={"User-Agent": PM_UA},
-            timeout=15,
-            follow_redirects=True,
-            verify=verify_ssl,
-        )
+        # httpx.Client doesn't accept verify per-request, so for the rare
+        # self-signed-cert site we make a one-off request outside the pool.
+        if not verify_ssl:
+            resp = httpx.get(
+                url, headers={"User-Agent": PM_UA}, timeout=15,
+                follow_redirects=True, verify=False,
+            )
+        else:
+            resp = client.get(url, headers={"User-Agent": PM_UA}, timeout=15)
         resp.raise_for_status()
-        return BeautifulSoup(resp.text, "lxml")
     except Exception as e:
         print(f"    ! fetch failed: {e}")
-        return None
-
-
-def scrape_html_site(source_name: str, url: str, listing_selector: str, verify_ssl: bool = True) -> list[dict]:
-    print(f"  [HTML] {source_name}")
-    soup = fetch_html(url, verify_ssl=verify_ssl)
-    if not soup:
         return []
 
-    selectors = [s.strip() for s in listing_selector.split(",")]
+    soup = BeautifulSoup(resp.text, "lxml")
     elements = []
-    for sel in selectors:
+    for sel in [s.strip() for s in listing_selector.split(",")]:
         elements = soup.select(sel)
         if elements:
             break
-
     if not elements:
         elements = soup.find_all(["article", "li", "tr"], limit=50)
 
@@ -258,29 +326,39 @@ def run():
         config = yaml.safe_load(f)
 
     total_new = 0
+    total_reseen = 0
 
-    # Craigslist HTML search pages
-    for source in config.get("craigslist_html", []):
-        listings = scrape_craigslist(source["name"], source["url"])
-        for listing in listings:
-            if upsert_listing(listing):
-                total_new += 1
-        time.sleep(REQUEST_DELAY)
+    with httpx.Client(follow_redirects=True, timeout=15) as client:
+        # Craigslist search pages
+        for source in config.get("craigslist_html", []):
+            listings = scrape_craigslist(client, source["name"], source["url"])
+            for listing in listings:
+                if upsert_listing(listing):
+                    total_new += 1
+                else:
+                    total_reseen += 1
+            time.sleep(REQUEST_DELAY)
 
-    # PM and boutique sites
-    for source in config.get("html_sites", []):
-        listings = scrape_html_site(
-            source["name"],
-            source["url"],
-            source["listing_selector"],
-            verify_ssl=source.get("verify_ssl", True),
-        )
-        for listing in listings:
-            if upsert_listing(listing):
-                total_new += 1
-        time.sleep(REQUEST_DELAY)
+        # PM and boutique sites
+        for source in config.get("html_sites", []):
+            listings = scrape_html_site(
+                client,
+                source["name"],
+                source["url"],
+                source["listing_selector"],
+                verify_ssl=source.get("verify_ssl", True),
+            )
+            for listing in listings:
+                if upsert_listing(listing):
+                    total_new += 1
+                else:
+                    total_reseen += 1
+            time.sleep(REQUEST_DELAY)
 
-    print(f"\nDone. {total_new} new listings added to database.")
+        # Enrich Craigslist with detail pages
+        enrich_craigslist_details(client)
+
+    print(f"\nDone. {total_new} new listings, {total_reseen} re-sighted.")
 
 
 if __name__ == "__main__":

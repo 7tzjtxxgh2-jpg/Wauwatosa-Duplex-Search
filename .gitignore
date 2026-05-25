@@ -1,3 +1,7 @@
 rentals.db
+rentals.db-shm
+rentals.db-wal
 .env
 __pycache__/
+.pytest_cache/
+*.pyc
