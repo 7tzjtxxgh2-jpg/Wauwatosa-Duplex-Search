@@ -8,6 +8,8 @@ from scraper import (
     is_likely_listing,
     is_residential_rental,
     classify_non_rental,
+    classify_out_of_scope,
+    is_in_scope,
     resolve_href,
 )
 
@@ -171,6 +173,131 @@ class TestNonRentalFilter:
         # Don't reject a listing just because we have no text to check yet
         assert is_residential_rental("") is True
         assert is_residential_rental(None) is True
+
+
+class TestGeographicFilter:
+    # ---- Out-of-scope locations (should reject) ----------------------------
+    @pytest.mark.parametrize("title,location,expected", [
+        # Bare location field matches
+        ("3BR home",                       "Waukesha",                      "waukesha"),
+        ("Spacious apartment",             "Brookfield",                    "brookfield"),
+        ("Updated 2 bedroom",              "Bay View",                      "bay view"),
+        # Multi-city location strings — set iteration order is arbitrary,
+        # so accept any of the cities as the label (test reads as a set membership)
+        ("Looking for Roommate",           "Sussex Lisbon Pewaukee area",   {"sussex", "lisbon", "pewaukee"}),
+        ("Apartment",                      "Oconomowoc, Waukesha, Brookfield", {"oconomowoc", "waukesha", "brookfield"}),
+        ("2BR duplex",                     "Watertown",                     "watertown"),
+        ("Cozy room",                      "Cudahy",                        "cudahy"),
+        ("Bedroom",                        "Shorewood",                     "shorewood"),
+        ("Apt",                            "East Side Milwaukee",           "east side milwaukee"),
+        ("Studio",                         "Lower East Side",               "lower east side"),
+        ("Loft",                           "Walker's Point",                "walker's point"),
+        # Comma + WI cleanup
+        ("Place",                          "Waukesha, WI",                  "waukesha"),
+        # Title at start
+        ("Bay View - 2 bedroom lower - 7/1",   "Milwaukee",                 "bay view"),
+        ("Studio Apartment - South Milwaukee", "",                          "south milwaukee"),
+        ("Sussex Furnished Room $800/mo",      "",                          "sussex"),
+        # "in <city>"
+        ("Updated apartment in Waukesha",      "Milwaukee",                 "waukesha"),
+        # "<city> + dwelling word"
+        ("Cudahy duplex 3BR",                  "",                          "cudahy"),
+    ])
+    def test_rejects_out_of_scope(self, title, location, expected):
+        label = classify_out_of_scope(title, location)
+        if isinstance(expected, set):
+            assert label in expected, f"expected one of {expected!r}, got {label!r}"
+        else:
+            assert label == expected, f"expected {expected!r}, got {label!r}"
+        assert not is_in_scope(title, location)
+
+    # ---- In-scope locations (must NOT be rejected) -------------------------
+    @pytest.mark.parametrize("title,location", [
+        # Direct Tosa
+        ("Wauwatosa 2 Bdrm, 1.5 Bath Near MCW", "Wauwatosa"),
+        ("Tosa upper duplex",                   ""),
+        ("Cute apartment",                      "Wauwatosa"),
+        # West Allis — immediate Tosa border
+        ("2BR apt",                             "West Allis"),
+        # Riverwest exception
+        ("Room Available Now in Riverwest Duplex", "Riverwest"),
+        ("Furnished room",                       "Riverwest"),
+        # ZIP-based identification
+        ("Duplex in 53213",                     "Milwaukee"),
+        ("Apartment near 53212",                "Milwaukee"),
+        # MCW / Froedtert keyword
+        ("Bedroom near MCW",                    "Milwaukee"),
+        ("Studio walking distance to Froedtert", ""),
+        # AFF / Brewers stadium
+        ("Apartment near American Family Field", "Milwaukee"),
+        ("2BR by Miller Park",                  ""),
+        # Tosa neighborhoods
+        ("Story Hill 2BR upper",                "Milwaukee"),
+        ("Washington Heights apartment",        "Milwaukee"),
+        # Ambiguous "Milwaukee" alone — keep, user can manually pass
+        ("3BR lower duplex",                    "Milwaukee"),
+    ])
+    def test_accepts_in_scope(self, title, location):
+        label = classify_out_of_scope(title, location)
+        assert label is None, f"rejected {title!r}/{location!r} as {label!r}"
+        assert is_in_scope(title, location)
+
+    # ---- Critical street-name false-positive guards ------------------------
+    @pytest.mark.parametrize("title,location", [
+        # Greenfield Ave is a major Milwaukee artery, not Greenfield WI suburb
+        ("11616 W. Greenfield Ave",             ""),
+        ("Apartment at Greenfield Ave",         ""),
+        ("Listing",                             "11616 W. Greenfield Ave"),
+        # Franklin Place / Franklin St are Milwaukee streets
+        ("2BRD upper duplex Franklin Place",    ""),
+        ("Studio at Franklin St",               ""),
+        ("Place",                               "1454 N. Franklin Place"),
+        # Jefferson St is a Milwaukee street
+        ("Apartment on Jefferson St",           ""),
+        # Port Washington Rd is a Milwaukee road
+        ("Studio near Port Washington Rd",      ""),
+    ])
+    def test_street_names_are_not_cities(self, title, location):
+        label = classify_out_of_scope(title, location)
+        assert label is None, (
+            f"false positive: rejected {title!r}/{location!r} (label={label!r}) "
+            f"— that's a street name, not a city"
+        )
+
+    # ---- Out-of-scope ZIP-code detection -----------------------------------
+    @pytest.mark.parametrize("title,location,expected_zip", [
+        ("Apartment downtown",          "Milwaukee, WI 53202",          "53202"),
+        ("Studio in Walker's Point",    "Milwaukee 53204",              "53204"),
+        ("2BR Bay View",                "Milwaukee 53207",              "53207"),
+        ("Place",                       "1454 N. Franklin Pl 53202",    "53202"),
+    ])
+    def test_rejects_out_of_scope_zips(self, title, location, expected_zip):
+        label = classify_out_of_scope(title, location)
+        assert label == f"ZIP {expected_zip}", (
+            f"expected 'ZIP {expected_zip}', got {label!r}"
+        )
+
+    def test_zip_in_description_body_rejected(self):
+        """Body-text ZIP catch: title/address don't mention East Side but body does."""
+        label = classify_out_of_scope(
+            title="2BRD upper duplex Franklin Place",
+            location="1454 N. Franklin Place",
+            body="Beautiful unit at 1454 N. Franklin Place, Milwaukee, WI 53202. 2BR, 1BA.",
+        )
+        assert label == "ZIP 53202"
+
+    def test_in_scope_keyword_in_body_overrides_oos_zip(self):
+        """If body says Wauwatosa, that wins even if an OOS ZIP appears."""
+        label = classify_out_of_scope(
+            title="2BR apartment",
+            location="Milwaukee",
+            body="Apartment in Wauwatosa, with mailing address 53202 occasionally used by landlord.",
+        )
+        assert label is None
+
+    def test_empty_inputs(self):
+        assert classify_out_of_scope("", "") is None
+        assert classify_out_of_scope(None, None) is None  # type: ignore
 
 
 class TestResolveHref:
