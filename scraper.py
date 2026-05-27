@@ -160,16 +160,33 @@ _STREET_SUFFIX_RE = re.compile(
     re.I,
 )
 
-# Out-of-scope Milwaukee ZIP codes — neighborhoods more than ~2-3 mi from
-# Tosa center. Catches East Side / Downtown / South Side listings that
-# show their ZIP in address/title but don't say their neighborhood.
+# Out-of-scope ZIP codes — anywhere more than ~2-3 mi from Tosa center.
+# When any of these ZIPs appears in title/location/body, the listing is rejected.
 OUT_OF_SCOPE_ZIPS = {
-    "53202",  # Downtown / Lower East Side
-    "53203",  # Downtown
-    "53204",  # Walker's Point / South Side
-    "53207",  # Bay View
-    "53211",  # UWM area / North East Side
-    "53217",  # Whitefish Bay
+    # Milwaukee neighborhoods (East Side, South Side, Downtown, etc.)
+    "53202", "53203",        # Downtown / Lower East Side
+    "53204",                 # Walker's Point / South Side
+    "53205",                 # Brewers Hill / Marquette campus area
+    "53207",                 # Bay View
+    "53211",                 # UWM area / North East Side
+    "53217",                 # Whitefish Bay / Glendale
+    "53218", "53223", "53224", "53225",  # Brown Deer / far north
+    "53219", "53220", "53221", "53227", "53228",  # Greenfield / Hales Corners / SW
+    "53233",                 # Downtown (Marquette area)
+    # Suburb ZIPs (south Milwaukee County)
+    "53110",                 # Cudahy
+    "53129",                 # Greendale
+    "53130",                 # Hales Corners
+    "53132",                 # Franklin
+    "53154",                 # Oak Creek
+    "53172",                 # South Milwaukee
+    # Suburb ZIPs (west / north)
+    "53005", "53045",        # Brookfield
+    "53051",                 # Menomonee Falls
+    "53066",                 # Oconomowoc
+    "53072",                 # Pewaukee
+    "53092",                 # Mequon
+    "53185", "53186", "53188", "53189",  # Waukesha
 }
 _OOS_ZIP_RE = re.compile(rf"\b({'|'.join(OUT_OF_SCOPE_ZIPS)})\b")
 
@@ -670,34 +687,65 @@ def clean_out_of_scope_listings() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Generic HTML scraper for PM sites
+# PM site scraper — supports httpx for static HTML and Playwright for JS-rendered
 # ---------------------------------------------------------------------------
 
-def scrape_html_site(
-    client: httpx.Client,
-    source_name: str,
-    url: str,
-    listing_selector: str,
-    verify_ssl: bool = True,
-) -> list[dict]:
-    print(f"  [HTML] {source_name}")
-    try:
-        # httpx.Client doesn't accept verify per-request, so for the rare
-        # self-signed-cert site we make a one-off request outside the pool.
-        if not verify_ssl:
-            resp = httpx.get(
-                url, headers={"User-Agent": PM_UA}, timeout=15,
-                follow_redirects=True, verify=False,
-            )
-        else:
-            resp = client.get(url, headers={"User-Agent": PM_UA}, timeout=15)
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"    ! fetch failed: {e}")
-        return []
+import hashlib as _hashlib
 
-    soup = BeautifulSoup(resp.text, "lxml")
-    elements = []
+# Tight address pattern (max 3 words between street number and suffix) to
+# avoid greedy matches like "$1,498 House 221 W Ring St" → "498 House 221...".
+# Word boundary ensures the number isn't part of a price ("$1,498").
+_ADDR_RE = re.compile(
+    r"\b\d{1,5}\s+(?:[NSEW]\.?\s+)?[\w'\.]+(?:\s+[\w'\.]+){0,3}\s+"
+    r"(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Pl|Place|Dr|Drive|"
+    r"Ln|Lane|Ct|Court|Way|Pkwy|Parkway|Terrace|Terr|Hwy|Highway)\b",
+    re.I,
+)
+
+# Strip leading "N / M [NEW]" pagination/badge prefixes that Atari and
+# similar AppFolio sites prepend to listing-card link text.
+_PAGINATION_PREFIX_RE = re.compile(r"^\s*\d+\s*/\s*\d+\s*(?:NEW\s*)?", re.I)
+
+
+def _extract_address(text: str) -> str | None:
+    """
+    Find the shortest street-address-like pattern in text. We try matching
+    starting at each plausible street-number position and pick the shortest
+    result, which avoids greedy false matches like
+        "498 House 221 W Ring St"  →  "221 W Ring St"
+    where "498" is actually the trailing digits of a price like "$1,498".
+    """
+    candidates: list[str] = []
+    # Only consider numbers that are followed by a space — skips "1,498" cases
+    for m in re.finditer(r"\b\d{1,5}(?=\s)", text):
+        sub = text[m.start():]
+        m2 = _ADDR_RE.match(sub)
+        if m2:
+            candidates.append(m2.group(0).strip())
+    return min(candidates, key=len) if candidates else None
+
+
+def _stable_id_for_card(card_text: str, source_url: str) -> str:
+    """
+    Build a deterministic URL fragment for a card whose surrounding <a> link
+    points back to the search page rather than a per-listing page.
+    Uses the street address if present; otherwise an 8-char content hash.
+    """
+    addr = _extract_address(card_text)
+    if addr:
+        slug = re.sub(r"\s+", "-", addr.strip().lower())
+        slug = re.sub(r"[^a-z0-9-]", "", slug)[:50]
+        return f"{source_url}#{slug}"
+    h = _hashlib.md5(card_text.strip().encode()).hexdigest()[:10]
+    return f"{source_url}#h-{h}"
+
+
+def _parse_listing_html(
+    html: str, source_name: str, url: str, listing_selector: str
+) -> tuple[list[dict], int]:
+    """Pure-function parser shared between httpx and Playwright engines."""
+    soup = BeautifulSoup(html, "lxml")
+    elements: list = []
     for sel in [s.strip() for s in listing_selector.split(",")]:
         elements = soup.select(sel)
         if elements:
@@ -715,12 +763,34 @@ def scrape_html_site(
         if classify_non_rental(text):
             skipped += 1
             continue
+        # PM-site geo filter: ZIP-based + city-name in title context
+        if classify_out_of_scope(text[:200], "", body=text):
+            skipped += 1
+            continue
 
         link = el.find("a", href=True)
-        href = resolve_href(link["href"], url) if link else url
+        # When the card's link points back to the source page (or no link at all),
+        # synthesize a stable per-card URL so dedup-by-URL works correctly.
+        if link:
+            raw_href = link["href"]
+            href = resolve_href(raw_href, url)
+            if href.rstrip("/") == url.rstrip("/") or raw_href in ("#", "/"):
+                href = _stable_id_for_card(text, url)
+        else:
+            href = _stable_id_for_card(text, url)
 
         listing = blank_listing(source_name, href)
-        listing["title"] = (link.get_text(strip=True) if link else None) or text[:80]
+        # Title: prefer the shortest extracted street address from card text
+        # (cleanest signal). Fall back to link text (minus pagination prefix).
+        link_text = link.get_text(strip=True) if link else ""
+        link_text = _PAGINATION_PREFIX_RE.sub("", link_text).strip()
+        addr = _extract_address(text)
+        if addr:
+            listing["title"] = addr
+        elif 10 < len(link_text) < 150:
+            listing["title"] = link_text
+        else:
+            listing["title"] = text[:80]
         listing["description"] = text[:500]
         listing["neighborhood"] = detect_neighborhood(text)
         listing["duplex_flag"] = int(detect_duplex(text))
@@ -729,8 +799,60 @@ def scrape_html_site(
         listing["listing_type"] = classify_listing_type(listing["title"], text, source_name)
         listing["raw_data"] = json.dumps({"raw_text": text[:1000], "source_url": url})
         listings.append(listing)
+    return listings, skipped
 
-    print(f"    → {len(listings)} listings ({skipped} non-listings skipped)")
+
+def scrape_html_site(
+    client: httpx.Client,
+    source_name: str,
+    url: str,
+    listing_selector: str,
+    verify_ssl: bool = True,
+) -> list[dict]:
+    """Fetch a static-HTML site via httpx, then parse."""
+    print(f"  [HTML] {source_name}")
+    try:
+        if not verify_ssl:
+            resp = httpx.get(
+                url, headers={"User-Agent": PM_UA}, timeout=15,
+                follow_redirects=True, verify=False,
+            )
+        else:
+            resp = client.get(url, headers={"User-Agent": PM_UA}, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"    ! fetch failed: {e}")
+        return []
+
+    listings, skipped = _parse_listing_html(resp.text, source_name, url, listing_selector)
+    print(f"    → {len(listings)} listings ({skipped} skipped)")
+    return listings
+
+
+def scrape_playwright_site(
+    browser,
+    source_name: str,
+    url: str,
+    listing_selector: str,
+    wait_extra_ms: int = 2000,
+    scroll: bool = True,
+) -> list[dict]:
+    """Fetch a JS-rendered site via a shared headless Chromium, then parse."""
+    print(f"  [JS]   {source_name}")
+    try:
+        page = browser.new_page()
+        page.goto(url, wait_until="networkidle", timeout=30_000)
+        if scroll:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        if wait_extra_ms:
+            page.wait_for_timeout(wait_extra_ms)
+        html = page.content()
+        page.close()
+    except Exception as e:
+        print(f"    ! fetch failed: {e}")
+        return []
+    listings, skipped = _parse_listing_html(html, source_name, url, listing_selector)
+    print(f"    → {len(listings)} listings ({skipped} skipped)")
     return listings
 
 
@@ -747,36 +869,53 @@ def run():
     total_new = 0
     total_reseen = 0
 
+    def _ingest(listings):
+        nonlocal total_new, total_reseen
+        for listing in listings:
+            if upsert_listing(listing):
+                total_new += 1
+            else:
+                total_reseen += 1
+
     with httpx.Client(follow_redirects=True, timeout=15) as client:
         # Craigslist search pages
         for source in config.get("craigslist_html", []):
-            listings = scrape_craigslist(client, source["name"], source["url"])
-            for listing in listings:
-                if upsert_listing(listing):
-                    total_new += 1
-                else:
-                    total_reseen += 1
+            _ingest(scrape_craigslist(client, source["name"], source["url"]))
             time.sleep(REQUEST_DELAY)
 
-        # PM and boutique sites
+        # Static-HTML PM and boutique sites
         for source in config.get("html_sites", []):
-            listings = scrape_html_site(
+            _ingest(scrape_html_site(
                 client,
                 source["name"],
                 source["url"],
                 source["listing_selector"],
                 verify_ssl=source.get("verify_ssl", True),
-            )
-            for listing in listings:
-                if upsert_listing(listing):
-                    total_new += 1
-                else:
-                    total_reseen += 1
+            ))
             time.sleep(REQUEST_DELAY)
 
         # Enrich Craigslist with detail pages; this also drops non-rentals
         # that only become visible once we have the body text.
         enrich_craigslist_details(client)
+
+    # JavaScript-rendered PM sites — only spin up Chromium if we have any
+    js_sites = config.get("playwright_sites", [])
+    if js_sites:
+        from playwright.sync_api import sync_playwright
+        print(f"\nLaunching headless Chromium for {len(js_sites)} JS-rendered site(s)…")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            for source in js_sites:
+                _ingest(scrape_playwright_site(
+                    browser,
+                    source["name"],
+                    source["url"],
+                    source["listing_selector"],
+                    wait_extra_ms=source.get("wait_extra_ms", 2000),
+                    scroll=source.get("scroll", True),
+                ))
+                time.sleep(REQUEST_DELAY)
+            browser.close()
 
     # Retroactive sweeps — catch anything that pre-dated the filters or
     # whose detail page was already fetched in an earlier run.

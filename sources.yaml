@@ -24,12 +24,34 @@ html_sites:
     listing_selector: "div.listing-item, div.property-card, article"
     note: "Public UWM off-campus board; includes west-side Tosa-adjacent"
 
-# JavaScript-rendered — listings only load after JS executes; check manually
-# atari:              https://www.ataripropertymanagement.com
-# welcome_home_mkw:   https://whmilwaukee.com/rentals
-# mpi_property:       https://www.mpiwi.com
-# rent_college_pads:  https://www.rentcollegepads.com/off-campus-housing/medical-college-wisconsin/search
-# rent_college_pads:  https://www.rentcollegepads.com/off-campus-housing/marquette/search
+# JavaScript-rendered sites — fetched via Playwright + headless Chromium
+playwright_sites:
+  - name: atari_property
+    url: "https://www.ataripropertymanagement.com/availability"
+    listing_selector: "div.listing-item"
+    note: "AppFolio backend; ~21 listings; single-family/duplex/multi-unit"
+
+  - name: welcome_home_milwaukee
+    url: "https://rentengine.io/c/wh-milwaukee"
+    listing_selector: "div.MuiCard-root"
+    wait_extra_ms: 3000
+    note: "WHM uses RentEngine.io iframe; scrape that endpoint directly"
+
+  - name: rent_college_pads_mcw
+    url: "https://www.rentcollegepads.com/off-campus-housing/medical-college-wisconsin/search"
+    listing_selector: "div.tmlpCard"
+    wait_extra_ms: 4000
+    note: "MCW off-campus listings (heaviest Tosa concentration)"
+
+  - name: rent_college_pads_marquette
+    url: "https://www.rentcollegepads.com/off-campus-housing/marquette/search"
+    listing_selector: "div.tmlpCard"
+    wait_extra_ms: 4000
+    note: "Marquette area; geo filter will drop most downtown ones"
+
+# MPI doesn't expose a public listings page (homepage only links to portal/contact)
+# Shorewest is Cloudflare-protected; even Playwright times out on their challenge page
+# Bieck is login-walled (Resident Portal)
 
 # Login-walled
 # bieck: https://bieck.twa.rentmanager.com
