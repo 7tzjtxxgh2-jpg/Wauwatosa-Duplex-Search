@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import json
 import secrets
+from datetime import datetime, timezone
 from functools import wraps
 
 from flask import Flask, render_template, request, jsonify, Response
@@ -31,6 +32,11 @@ load_dotenv()
 
 VALID_STATUSES = {"new", "interested", "touring_applying", "passed"}
 
+# A listing from an auto-scraped source that hasn't been re-seen in this many
+# days is probably gone (rented/removed). Manually-added sources (Facebook,
+# Nextdoor) are never re-scraped, so staleness there is informational only.
+STALE_DAYS = 21
+
 
 def _json_list(raw) -> list:
     """Decode a JSON-array string column into a Python list; tolerate null/bad data."""
@@ -41,6 +47,24 @@ def _json_list(raw) -> list:
         return val if isinstance(val, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def _days_since(dt_str: str | None) -> int | None:
+    """Whole days since a SQLite CURRENT_TIMESTAMP value (UTC), or None."""
+    if not dt_str:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            dt = datetime.strptime(dt_str, fmt).replace(tzinfo=timezone.utc)
+            return max(0, (datetime.now(timezone.utc) - dt).days)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_auto_scraped(source: str) -> bool:
+    """Auto-scraped sources get re-confirmed each run; manual ones don't."""
+    return not (source or "").startswith(("facebook", "nextdoor"))
 
 app = Flask(__name__)
 
@@ -111,10 +135,21 @@ def index():
     max_rent = request.args.get("max_rent", type=int)
     min_score = request.args.get("min_score", type=int)
     duplex_only = request.args.get("duplex_only") == "1"
+    hide_stale = request.args.get("hide_stale") == "1"
     sort = request.args.get("sort", "score")  # "score" (default) or "newest"
     search = request.args.get("q", "").strip().lower()
 
     listings = get_listings(status=status_filter or None)
+
+    # Annotate each listing with staleness (derived from last_seen)
+    for l in listings:
+        days = _days_since(l.get("last_seen"))
+        l["days_since_seen"] = days
+        l["stale"] = (
+            _is_auto_scraped(l.get("source", ""))
+            and days is not None
+            and days >= STALE_DAYS
+        )
 
     if source_filter:
         listings = [l for l in listings if l["source"] == source_filter]
@@ -126,6 +161,8 @@ def index():
         listings = [l for l in listings if (l.get("fit_score") or 0) >= min_score]
     if duplex_only:
         listings = [l for l in listings if l["duplex_flag"]]
+    if hide_stale:
+        listings = [l for l in listings if not l["stale"]]
     if search:
         listings = [
             l for l in listings
@@ -161,9 +198,11 @@ def index():
             "max_rent": max_rent,
             "min_score": min_score,
             "duplex_only": duplex_only,
+            "hide_stale": hide_stale,
             "sort": sort,
             "q": search,
         },
+        stale_days=STALE_DAYS,
     )
 
 

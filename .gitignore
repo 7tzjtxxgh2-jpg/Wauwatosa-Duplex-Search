@@ -5,3 +5,7 @@ rentals.db-wal
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# Captured listing snapshots (FB/Nextdoor exports) — keep the dir, ignore contents
+data/*.json
+!data/.gitkeep

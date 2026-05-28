@@ -1,5 +1,12 @@
 # Finding a Wauwatosa Duplex or Room Rental for September 2026: Channels & Semi-Automation Playbook
 
+> **Note:** This document is the original **research & planning playbook**. The
+> system that was actually built diverged from it in several places (Flask+SQLite
+> instead of Google Sheets, Craigslist HTML instead of RSS, a Quick Add box
+> instead of auto-scraping Facebook, etc.). For how the code actually works, see
+> **[ARCHITECTURE.md](ARCHITECTURE.md)**. For the weekly Facebook/Nextdoor
+> routine, see **[RUNBOOK_chrome.md](RUNBOOK_chrome.md)**.
+
 **TL;DR**
 - The big national portals (Zillow / Apartments.com / Hotpads / Trulia) capture only a slice of Tosa's duplex stock; the bulk lives on **Facebook Marketplace + a handful of FB Groups, Craigslist Milwaukee (with RSS), college off-campus boards (Marquette, MCW, UWM), and small landlord/realtor websites** (Krista Crowder/wauwatosaduplex.com, Bieck, MPI, RENU, Ogden, Atari, Welcome Home Milwaukee, Shorewest). Yard signs and word-of-mouth in the Village/East Tosa/Story Hill are still material.
 - The right semi-automation stack is **(1) email digests + Gmail filters fed into Claude API for parsing, (2) Claude-in-Chrome for the login-walled sites (Facebook, Nextdoor, MCW credentialed list), and (3) a weekly–to–6-hourly GitHub Actions cron scraping Craigslist's RSS + a handful of small-PM sites**, with hits flowing into a single Google Sheet plus a GitHub Pages frontend modeled on the user's PhilJobs Dashboard.

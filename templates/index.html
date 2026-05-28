@@ -242,6 +242,14 @@
         </div>
       </div>
 
+      <div class="col-auto">
+        <div class="form-check mb-0">
+          <input class="form-check-input" type="checkbox" name="hide_stale" value="1"
+            id="hideStale" {{ 'checked' if filters.hide_stale }} onchange="this.form.submit()">
+          <label class="form-check-label" for="hideStale" style="font-size:0.82rem">Hide likely-gone</label>
+        </div>
+      </div>
+
       <div class="col">
         <div class="input-group input-group-sm">
           <input type="text" name="q" class="form-control" placeholder="Search title, neighborhood, description…" value="{{ filters.q }}">
@@ -337,6 +345,11 @@
             {% endif %}
             {% if l.available_date %}
             <span class="text-muted" style="font-size:0.72rem">avail {{ l.available_date[:10] }}</span>
+            {% endif %}
+            {% if l.stale %}
+            <span class="badge bg-warning text-dark badge-sm" title="Auto-scraped listing not re-seen in {{ stale_days }}+ days — probably rented or removed">⚠ likely gone</span>
+            {% elif l.days_since_seen is not none and l.days_since_seen >= 3 %}
+            <span class="text-muted" style="font-size:0.72rem">seen {{ l.days_since_seen }}d ago</span>
             {% endif %}
           </div>
 

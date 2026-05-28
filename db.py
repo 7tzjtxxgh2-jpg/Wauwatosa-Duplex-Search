@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import sqlite3
 import os
+from pathlib import Path
 from contextlib import contextmanager
 
-DB_PATH = os.getenv("DB_PATH", "rentals.db")
+# Anchor the default DB to this file's directory so the app/scraper work
+# regardless of the current working directory. An explicit DB_PATH env var
+# (used by tests and the CI smoke test) always wins.
+DB_PATH = os.getenv("DB_PATH") or str(Path(__file__).resolve().parent / "rentals.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -133,11 +137,6 @@ def update_notes(listing_id: int, notes: str) -> None:
         conn.execute("UPDATE listings SET notes=? WHERE id=?", (notes, listing_id))
 
 
-def update_fit_score(listing_id: int, fit_score: int) -> None:
-    with get_conn() as conn:
-        conn.execute("UPDATE listings SET fit_score=? WHERE id=?", (fit_score, listing_id))
-
-
 def update_description(
     listing_id: int,
     description: str,
@@ -178,15 +177,12 @@ def delete_listing(listing_id: int) -> None:
 # Reads
 # ---------------------------------------------------------------------------
 
-def get_listings(status: str | None = None, min_score: int | None = None) -> list[dict]:
-    sql = "SELECT * FROM listings WHERE 1=1"
+def get_listings(status: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM listings"
     params: list = []
     if status:
-        sql += " AND status=?"
+        sql += " WHERE status=?"
         params.append(status)
-    if min_score is not None:
-        sql += " AND (fit_score IS NULL OR fit_score>=?)"
-        params.append(min_score)
     sql += " ORDER BY first_seen DESC"
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]

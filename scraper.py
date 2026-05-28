@@ -13,10 +13,15 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
+
 import yaml
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+
+# Anchor config to this file's directory so the scraper runs from any CWD.
+SOURCES_PATH = Path(__file__).resolve().parent / "sources.yaml"
 
 from db import (
     init_db,
@@ -879,7 +884,7 @@ def scrape_playwright_site(
 def run():
     init_db()
 
-    with open("sources.yaml") as f:
+    with open(SOURCES_PATH) as f:
         config = yaml.safe_load(f)
 
     total_new = 0
