@@ -8,6 +8,7 @@ Hosted:    set FLASK_ENV=production AND SECRET_KEY AND optionally
 from __future__ import annotations
 
 import os
+import json
 import secrets
 from functools import wraps
 
@@ -29,6 +30,17 @@ from db import (
 load_dotenv()
 
 VALID_STATUSES = {"new", "interested", "touring_applying", "passed"}
+
+
+def _json_list(raw) -> list:
+    """Decode a JSON-array string column into a Python list; tolerate null/bad data."""
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+        return val if isinstance(val, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 app = Flask(__name__)
 
@@ -97,7 +109,9 @@ def index():
     source_filter = request.args.get("source", "")
     type_filter = request.args.get("type", "")
     max_rent = request.args.get("max_rent", type=int)
+    min_score = request.args.get("min_score", type=int)
     duplex_only = request.args.get("duplex_only") == "1"
+    sort = request.args.get("sort", "score")  # "score" (default) or "newest"
     search = request.args.get("q", "").strip().lower()
 
     listings = get_listings(status=status_filter or None)
@@ -108,6 +122,8 @@ def index():
         listings = [l for l in listings if l.get("listing_type") == type_filter]
     if max_rent:
         listings = [l for l in listings if l["rent"] and l["rent"] <= max_rent]
+    if min_score is not None:
+        listings = [l for l in listings if (l.get("fit_score") or 0) >= min_score]
     if duplex_only:
         listings = [l for l in listings if l["duplex_flag"]]
     if search:
@@ -116,7 +132,21 @@ def index():
             if search in (l["title"] or "").lower()
             or search in (l["neighborhood"] or "").lower()
             or search in (l["description"] or "").lower()
+            or search in (l.get("ai_summary") or "").lower()
         ]
+
+    # Sort: by fit score (desc, unscored last) or by newest first
+    if sort == "score":
+        listings.sort(
+            key=lambda l: (l.get("fit_score") if l.get("fit_score") is not None else -1),
+            reverse=True,
+        )
+    # "newest" is already the DB default order (first_seen DESC)
+
+    # Decode JSON concerns/highlights for template rendering
+    for l in listings:
+        l["concerns_list"] = _json_list(l.get("concerns"))
+        l["highlights_list"] = _json_list(l.get("highlights"))
 
     return render_template(
         "index.html",
@@ -129,7 +159,9 @@ def index():
             "source": source_filter,
             "type": type_filter,
             "max_rent": max_rent,
+            "min_score": min_score,
             "duplex_only": duplex_only,
+            "sort": sort,
             "q": search,
         },
     )

@@ -80,6 +80,40 @@ class TestStatusAndNotes:
             tmp_db.get_listing(999_999)
 
 
+class TestEnrichment:
+    def test_needs_enrichment_excludes_scored(self, tmp_db):
+        tmp_db.upsert_listing(make_listing(url="https://a/1"))
+        tmp_db.upsert_listing(make_listing(url="https://a/2"))
+        assert len(tmp_db.get_listings_needing_enrichment()) == 2
+        rid = tmp_db.get_listings()[0]["id"]
+        tmp_db.update_enrichment(rid, {"fit_score": 8, "ai_summary": "nice"})
+        # One now has enriched_at set, so only one remains pending
+        assert len(tmp_db.get_listings_needing_enrichment()) == 1
+
+    def test_update_enrichment_stores_fields(self, tmp_db):
+        tmp_db.upsert_listing(make_listing())
+        rid = tmp_db.get_listings()[0]["id"]
+        tmp_db.update_enrichment(rid, {
+            "fit_score": 9,
+            "ai_summary": "2BR duplex",
+            "pet_policy": "cats_only",
+            "concerns": '["over budget"]',
+            "highlights": '["garage"]',
+        })
+        row = tmp_db.get_listing(rid)
+        assert row["fit_score"] == 9
+        assert row["ai_summary"] == "2BR duplex"
+        assert row["pet_policy"] == "cats_only"
+        assert row["enriched_at"] is not None
+
+    def test_update_enrichment_ignores_unknown_fields(self, tmp_db):
+        tmp_db.upsert_listing(make_listing())
+        rid = tmp_db.get_listings()[0]["id"]
+        # Should not raise on a stray key, just ignore it
+        tmp_db.update_enrichment(rid, {"fit_score": 5, "bogus_column": "x"})
+        assert tmp_db.get_listing(rid)["fit_score"] == 5
+
+
 class TestAggregates:
     def test_get_sources_dedups(self, tmp_db):
         tmp_db.upsert_listing(make_listing(url="https://a/1", source="foo"))

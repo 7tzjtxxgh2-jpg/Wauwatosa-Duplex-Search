@@ -51,6 +51,16 @@ MIGRATIONS = [
      "CREATE INDEX IF NOT EXISTS idx_desc_fetched ON listings(description_fetched)"),
     ("listing_type", "TEXT DEFAULT 'rental'",
      "CREATE INDEX IF NOT EXISTS idx_listing_type ON listings(listing_type)"),
+    # Chunk 2: Claude (Haiku) enrichment + fit scoring
+    ("ai_summary", "TEXT", None),
+    ("pet_policy", "TEXT", None),
+    ("parking", "TEXT", None),
+    ("laundry", "TEXT", None),
+    ("fit_reason", "TEXT", None),
+    ("concerns", "TEXT", None),     # JSON array
+    ("highlights", "TEXT", None),   # JSON array
+    ("enriched_at", "DATETIME",
+     "CREATE INDEX IF NOT EXISTS idx_enriched_at ON listings(enriched_at)"),
 ]
 
 
@@ -235,6 +245,35 @@ def update_listing_type(listing_id: int, listing_type: str) -> None:
             "UPDATE listings SET listing_type=? WHERE id=?",
             (listing_type, listing_id),
         )
+
+
+def get_listings_needing_enrichment(limit: int | None = None) -> list[dict]:
+    """Listings that haven't been scored by Claude yet (enriched_at IS NULL)."""
+    sql = "SELECT * FROM listings WHERE enriched_at IS NULL ORDER BY first_seen DESC"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(sql).fetchall()]
+
+
+def update_enrichment(listing_id: int, fields: dict) -> None:
+    """
+    Store Claude enrichment results. `fields` may contain any of:
+    ai_summary, neighborhood, beds, baths, rent, duplex_flag, pet_policy,
+    parking, laundry, available_date, fit_score, fit_reason, concerns,
+    highlights. Sets enriched_at to now.
+    """
+    allowed = {
+        "ai_summary", "neighborhood", "beds", "baths", "rent", "duplex_flag",
+        "pet_policy", "parking", "laundry", "available_date", "fit_score",
+        "fit_reason", "concerns", "highlights",
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    set_clause = ", ".join(f"{k}=:{k}" for k in updates)
+    set_clause += ", enriched_at=CURRENT_TIMESTAMP" if set_clause else "enriched_at=CURRENT_TIMESTAMP"
+    params = {**updates, "lid": listing_id}
+    with get_conn() as conn:
+        conn.execute(f"UPDATE listings SET {set_clause} WHERE id=:lid", params)
 
 
 def get_listings_needing_description(source_prefix: str = "craigslist_") -> list[dict]:
