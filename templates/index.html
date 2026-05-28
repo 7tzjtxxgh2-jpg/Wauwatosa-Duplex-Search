@@ -108,15 +108,55 @@
 
 <!-- Header -->
 <div class="bg-dark text-white py-2 px-4 d-flex align-items-center justify-content-between">
-  <div>
+  <div class="d-flex align-items-center gap-3">
     <span class="fw-bold fs-6">Wauwatosa Rental Search</span>
-    <span class="text-secondary ms-2" style="font-size:0.8rem">{{ counts.total }} listings</span>
+    <span class="text-secondary" style="font-size:0.8rem">{{ counts.total }} listings</span>
+    <button onclick="toggleQuickAdd()" class="btn btn-sm btn-success" style="font-size:0.78rem">
+      + Add from Facebook
+    </button>
   </div>
   <div class="d-flex gap-4 text-center" style="font-size:0.82rem">
     <div><span class="fw-bold">{{ counts.new }}</span> <span class="text-secondary">new</span></div>
     <div><span class="fw-bold text-primary">{{ counts.interested }}</span> <span class="text-secondary">interested</span></div>
     <div><span class="fw-bold text-warning">{{ counts.touring_applying }}</span> <span class="text-secondary">touring</span></div>
     <div><span class="fw-bold text-danger">{{ counts.passed }}</span> <span class="text-secondary">passed</span></div>
+  </div>
+</div>
+
+<!-- Quick Add panel (hidden by default) -->
+<div id="quickAddPanel" style="display:none; background:#eef7f0; border-bottom:1px solid #c3e6cb; padding:14px 24px;">
+  <div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <strong style="font-size:0.92rem">Paste a Facebook group / Nextdoor post</strong>
+      <button onclick="toggleQuickAdd()" class="btn-close" style="font-size:0.7rem"></button>
+    </div>
+    <div class="row g-2">
+      <div class="col-12">
+        <textarea id="qaText" class="form-control" rows="4"
+          placeholder="Paste the full post text here — address, rent, beds, description, contact, etc."></textarea>
+      </div>
+      <div class="col-md-5">
+        <input id="qaUrl" type="text" class="form-control form-control-sm"
+          placeholder="Post link (optional but helpful)">
+      </div>
+      <div class="col-md-3">
+        <select id="qaSource" class="form-select form-select-sm">
+          <option value="facebook_group">Facebook group</option>
+          <option value="nextdoor">Nextdoor</option>
+          <option value="facebook_group_tosa">Wauwatosa RE group</option>
+          <option value="facebook_group_washheights">Washington Heights group</option>
+          <option value="facebook_group_riverwest">Riverwest group</option>
+        </select>
+      </div>
+      <div class="col-md-4 d-flex gap-2">
+        <button id="qaBtn" onclick="submitQuickAdd()" class="btn btn-success btn-sm flex-grow-1">Add &amp; Score</button>
+      </div>
+    </div>
+    <div id="qaResult" class="mt-2" style="font-size:0.85rem"></div>
+    <div class="text-muted mt-1" style="font-size:0.75rem">
+      Runs through the same non-rental + Wauwatosa-area filters, then scores with AI.
+      Off-topic or far-away posts are skipped automatically.
+    </div>
   </div>
 </div>
 
@@ -340,6 +380,52 @@ async function postJson(url, payload) {
     },
     body: JSON.stringify(payload),
   });
+}
+
+function toggleQuickAdd() {
+  const p = document.getElementById('quickAddPanel');
+  const show = p.style.display === 'none';
+  p.style.display = show ? 'block' : 'none';
+  if (show) document.getElementById('qaText').focus();
+}
+
+async function submitQuickAdd() {
+  const text = document.getElementById('qaText').value.trim();
+  const url = document.getElementById('qaUrl').value.trim();
+  const source = document.getElementById('qaSource').value;
+  const result = document.getElementById('qaResult');
+  const btn = document.getElementById('qaBtn');
+  if (!text) { result.innerHTML = '<span class="text-danger">Paste the post text first.</span>'; return; }
+
+  btn.disabled = true; btn.textContent = 'Scoring…';
+  result.innerHTML = '<span class="text-muted">Filtering and scoring…</span>';
+  try {
+    const resp = await fetch('/quick-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN},
+      body: JSON.stringify({text, url, source}),
+    });
+    const data = await resp.json();
+    if (data.ok && data.fit_score !== undefined) {
+      result.innerHTML = `<span class="text-success fw-bold">✓ Added — scored ${data.fit_score}/10.</span> `
+        + `<span class="text-muted">${data.summary || ''}</span> `
+        + `<a href="#" onclick="location.reload();return false;">refresh to see it ranked →</a>`;
+      document.getElementById('qaText').value = '';
+      document.getElementById('qaUrl').value = '';
+    } else if (data.duplicate) {
+      result.innerHTML = '<span class="text-secondary">Already in your dashboard.</span>';
+    } else if (data.skipped) {
+      result.innerHTML = `<span class="text-warning">Skipped: ${data.message}</span>`;
+    } else if (data.ok && data.unscored) {
+      result.innerHTML = '<span class="text-success">✓ Added.</span> <span class="text-muted">Scoring will run on the next batch.</span>';
+    } else {
+      result.innerHTML = `<span class="text-danger">${data.error || 'Could not add.'}</span>`;
+    }
+  } catch (e) {
+    result.innerHTML = `<span class="text-danger">Error: ${e}</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add & Score';
+  }
 }
 
 async function setStatus(id, status, btn) {

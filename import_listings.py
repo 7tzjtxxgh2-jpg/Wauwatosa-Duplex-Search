@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import sys
 import json
+import hashlib
 import argparse
 
-from db import init_db, upsert_listing
+from db import init_db, upsert_listing, get_listing
 from scraper import (
     blank_listing,
     classify_non_rental,
@@ -117,6 +118,60 @@ def ingest_listings(raw_listings: list[dict], source: str) -> dict:
         else:
             counts["reseen"] += 1
     return counts
+
+
+def quick_add(text: str, url: str = "", source: str = "facebook_group") -> dict:
+    """
+    Add a single pasted listing (e.g. a Facebook group post copied by hand).
+
+    - text: the full pasted post body (required)
+    - url:  optional permalink; if blank a stable synthetic URL is generated
+            from a hash of the text so re-pasting the same post dedups
+    - source: tag, e.g. 'facebook_group', 'nextdoor'
+
+    Returns {"status": "ok"|"skip_nonrental"|"skip_geo"|"empty"|"duplicate",
+             "listing_id": int|None, "title": str}
+    """
+    init_db()
+    text = (text or "").strip()
+    if not text:
+        return {"status": "empty", "listing_id": None, "title": ""}
+
+    if not (url or "").strip():
+        digest = hashlib.md5(text.encode()).hexdigest()[:12]
+        url = f"manual://{source}/{digest}"
+
+    first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    raw = {
+        "url": url.strip(),
+        "title": first_line[:120],
+        "description": text,
+        "location": "",
+    }
+
+    result = normalize(raw, source)
+    if result is None:
+        return {"status": "empty", "listing_id": None, "title": first_line[:80]}
+    status, listing = result
+    if status != "ok":
+        return {"status": status, "listing_id": None, "title": first_line[:80]}
+
+    is_new = upsert_listing(listing)
+    if not is_new:
+        # Find existing id for the URL so the caller can still link to it
+        try:
+            from db import get_conn
+            with get_conn() as conn:
+                row = conn.execute("SELECT id FROM listings WHERE url=?", (listing["url"],)).fetchone()
+            return {"status": "duplicate", "listing_id": row["id"] if row else None,
+                    "title": listing["title"]}
+        except Exception:
+            return {"status": "duplicate", "listing_id": None, "title": listing["title"]}
+
+    from db import get_conn
+    with get_conn() as conn:
+        row = conn.execute("SELECT id FROM listings WHERE url=?", (listing["url"],)).fetchone()
+    return {"status": "ok", "listing_id": row["id"] if row else None, "title": listing["title"]}
 
 
 def main():

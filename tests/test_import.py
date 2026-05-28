@@ -88,6 +88,45 @@ class TestIngest:
         pending = db_module.get_listings_needing_enrichment()
         assert any(l["url"] == "https://fb.com/c" for l in pending)
 
+    def test_quick_add_in_scope(self, tmp_db):
+        db_module, il = tmp_db
+        r = il.quick_add(
+            "2BR/1BA lower duplex in Wauwatosa near 68th & Wells. $1,150/mo, "
+            "off-street parking, cats OK. Available July 1.",
+            url="", source="facebook_group",
+        )
+        assert r["status"] == "ok"
+        assert r["listing_id"] is not None
+        # Synthetic URL generated, listing queued for scoring
+        row = db_module.get_listing(r["listing_id"])
+        assert row["source"] == "facebook_group"
+        assert row["enriched_at"] is None
+
+    def test_quick_add_dedups_same_text(self, tmp_db):
+        db_module, il = tmp_db
+        post = "2BR upper duplex in Story Hill, $1000/mo, hardwood floors"
+        r1 = il.quick_add(post, source="facebook_group")
+        r2 = il.quick_add(post, source="facebook_group")
+        assert r1["status"] == "ok"
+        assert r2["status"] == "duplicate"
+        assert r2["listing_id"] == r1["listing_id"]
+
+    def test_quick_add_skips_iso(self, tmp_db):
+        _, il = tmp_db
+        r = il.quick_add("Looking for a 2 bedroom for my family, budget $1000",
+                         source="facebook_group")
+        assert r["status"] == "skip_nonrental"
+
+    def test_quick_add_skips_out_of_scope(self, tmp_db):
+        _, il = tmp_db
+        r = il.quick_add("3BR house for rent in Waukesha, $1400/mo big yard",
+                         source="facebook_group")
+        assert r["status"] == "skip_geo"
+
+    def test_quick_add_empty(self, tmp_db):
+        _, il = tmp_db
+        assert il.quick_add("   ", source="facebook_group")["status"] == "empty"
+
     def test_mixed_batch_counts(self, tmp_db):
         _, il = tmp_db
         rows = [

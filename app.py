@@ -195,6 +195,53 @@ def set_notes(listing_id):
     return jsonify({"ok": True})
 
 
+@app.route("/quick-add", methods=["POST"])
+@require_auth
+def quick_add_route():
+    """Add a single pasted listing (e.g. an FB group post) and score it immediately."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    url = (data.get("url") or "").strip()
+    source = (data.get("source") or "facebook_group").strip() or "facebook_group"
+
+    if not text:
+        return jsonify({"ok": False, "error": "Paste the listing text first."}), 400
+
+    from import_listings import quick_add
+    result = quick_add(text, url=url, source=source)
+
+    if result["status"] == "skip_nonrental":
+        return jsonify({"ok": False, "skipped": "non-rental",
+                        "message": "Looks like a non-rental post (job, commercial, or ISO). Not added."})
+    if result["status"] == "skip_geo":
+        return jsonify({"ok": False, "skipped": "out-of-scope",
+                        "message": "Looks out of the Wauwatosa area. Not added."})
+    if result["status"] == "empty":
+        return jsonify({"ok": False, "error": "Couldn't read a listing from that text."}), 400
+    if result["status"] == "duplicate":
+        return jsonify({"ok": True, "duplicate": True, "listing_id": result["listing_id"],
+                        "message": "Already in your dashboard."})
+
+    # New listing — score it right away so it appears ranked
+    listing_id = result["listing_id"]
+    try:
+        from anthropic import Anthropic
+        from enrich import enrich_listing
+        from db import update_enrichment
+        listing = get_listing(listing_id)
+        fields = enrich_listing(Anthropic(), listing)
+        fields.pop("_usage", None)
+        update_enrichment(listing_id, fields)
+        return jsonify({"ok": True, "listing_id": listing_id,
+                        "fit_score": fields["fit_score"],
+                        "summary": fields["ai_summary"],
+                        "message": f"Added and scored {fields['fit_score']}/10."})
+    except Exception as e:
+        # Listing is saved even if scoring failed; it'll be picked up by enrich.py later
+        return jsonify({"ok": True, "listing_id": listing_id, "unscored": True,
+                        "message": f"Added (scoring will run later): {e}"})
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5001))
     debug = not _is_production

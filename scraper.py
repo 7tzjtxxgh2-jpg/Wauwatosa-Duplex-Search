@@ -72,9 +72,15 @@ NON_RENTAL_PATTERNS = [
                                                                   "personals"),
     (r"\b(friend\s+with\s+benefits|fwb)\b",                       "personals"),
 
-    # ---- ISO (in-search-of) posts -------------------------------------------
+    # ---- ISO (in-search-of) posts: a renter seeking housing, not an offering.
+    # Careful: "looking for a roommate/tenant" IS an offering, so the targets
+    # below are dwellings (bedroom-count/apartment/house/place), never people.
     (r"^\s*iso\b",                                                "ISO post"),
     (r"\bin\s+search\s+of\b.*\b(room|apartment|housing|place|sublet)\b",
+                                                                  "ISO post"),
+    (r"\blooking\s+for\s+(a\s+|an\s+|my\s+)?(\d+\s*(bed|br|bedroom)|apartment|apt\b|house|place\s+to\s+(rent|live)|rental|home|housing|duplex|studio|condo)\b",
+                                                                  "ISO post"),
+    (r"\b(in\s+need\s+of|searching\s+for|need\s+to\s+find)\s+(a\s+|an\s+)?(\d+\s*(bed|br|bedroom)|apartment|apt\b|place\s+to\s+(rent|live)|rental|housing|home)\b",
                                                                   "ISO post"),
 
     # ---- Commercial / business spaces ---------------------------------------

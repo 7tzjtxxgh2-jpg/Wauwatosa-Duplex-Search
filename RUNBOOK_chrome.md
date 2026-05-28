@@ -77,18 +77,36 @@ listing with the richer `description` for a more accurate score.
 
 ---
 
-## B. Facebook Groups (agent-driven, higher quality)
+## B. Facebook Groups — use the "Quick Add" box (NOT automated scraping)
 
-Same approach, but navigate to each group's feed and extract post text + links.
-Highest-value Tosa/Milwaukee groups (from the research doc):
+**Why not automated:** FB group feeds are virtualized (only ~1-2 posts exist in
+the page at a time; the rest are gray skeletons that only render when a *human*
+scrolls), the text is deliberately obfuscated, and post permalinks aren't
+accessible. Agent-driven bulk extraction is not reliable. Confirmed the hard way.
 
-- Wauwatosa, WI: Buy Sell Discuss Real Estate — `facebook.com/groups/Wauwatosa/`
-- Milwaukee Housing/Rooms/Apartments/Sublets — `facebook.com/groups/apartmentsinmilwaukee/`
-- Milwaukee Roommates — `facebook.com/groups/MilwaukeeRoommates/`
-- Milwaukee County Apartments for Rent — `facebook.com/groups/1404749289830969/`
+**The workflow that actually works** — skim your groups by eye, paste the gems:
 
-Group posts are free-text, so capture the whole post body as `description` —
-that gives Haiku much more to score on than the Marketplace grid.
+1. Open the dashboard (http://localhost:5001) and click **"+ Add from Facebook"**
+   in the top bar. A green Quick Add panel opens.
+2. In your normal browser, browse your landlord groups (sorted **New posts**):
+   - Wauwatosa Real Estate `[TosaRealEstate]`
+   - Washington Heights MKE Rental Housing `[767723988240707]`
+   - Milwaukee/West Allis/Wauwatosa/Franklin Area Housing `[MilwaukeeRoomForRent]`
+   - Riverwest Rentals and Roommates `[818102514887130]`
+   - SE Wisconsin Rentals `[1540899029546940]`
+3. When you spot a real landlord listing, **copy the full post text**, paste it
+   into the Quick Add box, paste the post link (optional), pick the group, and
+   click **Add & Score**.
+4. It runs the same non-rental + Wauwatosa-area filters, scores with Haiku, and
+   tells you the fit score in ~3 seconds. ISO posts / far-away / commercial get
+   skipped automatically with a note. Refresh to see it ranked with everything else.
+
+~10 seconds per good post, no terminal, no JSON files. This respects how FB
+groups actually work (eyes-on) while keeping all your listings in one ranked place.
+
+### Tip: sort groups by "New posts"
+In each group, click the **"Most relevant"** dropdown → **"New posts"** so you
+see fresh availability instead of high-engagement (often renter-ISO) threads.
 
 ---
 
