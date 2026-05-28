@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from db import init_db, get_listings_needing_enrichment, update_enrichment
 
@@ -78,6 +78,36 @@ class ListingEnrichment(BaseModel):
                     "0 = terrible fit, 10 = perfect fit"
     )
     fit_reason: str = Field(description="One sentence explaining the score")
+
+    # Models occasionally emit near-synonyms outside the enum (e.g. 'on_street').
+    # Normalize before validation so one stray value doesn't fail the whole listing.
+    @field_validator("parking", mode="before")
+    @classmethod
+    def _norm_parking(cls, v):
+        m = {"on_street": "street", "on-street": "street", "driveway": "off_street",
+             "lot": "off_street", "covered": "garage", "attached_garage": "garage"}
+        v = (str(v).lower().strip() if v is not None else "unknown")
+        v = m.get(v, v)
+        return v if v in {"garage", "off_street", "street", "none", "unknown"} else "unknown"
+
+    @field_validator("laundry", mode="before")
+    @classmethod
+    def _norm_laundry(cls, v):
+        m = {"in-unit": "in_unit", "in unit": "in_unit", "washer/dryer": "in_unit",
+             "hookup": "hookups", "coin": "shared", "on_site": "shared", "on-site": "shared"}
+        v = (str(v).lower().strip() if v is not None else "unknown")
+        v = m.get(v, v)
+        return v if v in {"in_unit", "shared", "hookups", "none", "unknown"} else "unknown"
+
+    @field_validator("pet_policy", mode="before")
+    @classmethod
+    def _norm_pets(cls, v):
+        m = {"cats": "cats_only", "dogs": "dogs_only", "yes": "allowed",
+             "no": "no_pets", "none": "no_pets", "negotiable": "allowed"}
+        v = (str(v).lower().strip() if v is not None else "unknown")
+        v = m.get(v, v)
+        return v if v in {"allowed", "cats_only", "dogs_only", "no_pets", "unknown"} else "unknown"
+
     concerns: list[str] = Field(
         default_factory=list,
         description="Short flags that lower the score, e.g. ['over budget', 'no laundry', 'no pets']",

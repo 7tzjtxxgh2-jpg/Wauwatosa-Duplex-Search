@@ -139,6 +139,15 @@ class TestNonRentalFilter:
         ("Coworking desk available",                "coworking"),
         ("Event venue for rent - weddings welcome", "event space"),
         ("Yoga studio for rent, fully equipped",    "fitness studio"),
+        # FB Marketplace commercial spam (exposed by live extraction)
+        ("OFFICE FOR LEASE DOWN TOWN WEST BEND",    "office space"),
+        ("Booth rent",                              "chair/booth rental"),
+        ("Suite for rent - $410/Month",             "commercial suite"),
+        ("Self Storage Units",                      "storage"),
+        ("Outside Parking/Storage of Boats/Campers", "storage"),
+        ("Food Truck Lot For Rent - Prime Location", "food truck lot"),
+        ("Shop for Rent for Mechanic Work",         "commercial shop"),
+        ("Suite 200 | 587 SF Private Office for Lease", "office space"),
     ])
     def test_rejects_non_rentals(self, text, expected_label):
         label = classify_non_rental(text)
